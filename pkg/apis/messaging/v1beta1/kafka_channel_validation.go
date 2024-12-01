@@ -53,11 +53,24 @@ func (kc *KafkaChannel) Validate(ctx context.Context) *apis.FieldError {
 func (kcs *KafkaChannelSpec) Validate(ctx context.Context) *apis.FieldError {
 	var errs *apis.FieldError
 
+	if len(kcs.Tenant) == 0 {
+		fe := apis.ErrMissingField("tenant")
+		errs = errs.Also(fe)
+	}
+
+	// allow 0 replica
+	if kcs.Replicas < 0 {
+		fe := apis.ErrInvalidValue(kcs.Replicas, "replicas")
+		errs = errs.Also(fe)
+	}
+
+	// 0 is disallowed since it makes no sense for kafka
 	if kcs.NumPartitions <= 0 {
 		fe := apis.ErrInvalidValue(kcs.NumPartitions, "numPartitions")
 		errs = errs.Also(fe)
 	}
 
+	// 0 is disallowed since it makes no sense for kafka
 	if kcs.ReplicationFactor <= 0 {
 		fe := apis.ErrInvalidValue(kcs.ReplicationFactor, "replicationFactor")
 		errs = errs.Also(fe)

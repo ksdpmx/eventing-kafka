@@ -17,6 +17,7 @@ limitations under the License.
 package v1beta1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	"time"
 
 	"github.com/rickb777/date/period"
@@ -64,6 +65,11 @@ var (
 
 // KafkaChannelSpec defines the specification for a KafkaChannel.
 type KafkaChannelSpec struct {
+	Tenant       string            `json:"tenant"`
+	Replicas     int32             `json:"replicas"`
+	NodeSelector map[string]string `json:"nodeSelector"`
+	Affinity     *corev1.Affinity  `json:"affinity,omitempty"`
+
 	// NumPartitions is the number of partitions of a Kafka topic. By default, it is set to 1.
 	NumPartitions int32 `json:"numPartitions"`
 

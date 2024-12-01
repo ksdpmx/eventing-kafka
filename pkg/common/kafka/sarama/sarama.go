@@ -66,7 +66,9 @@ func LoadAuthConfig(ctx context.Context, name string, namespace string) *client.
 
 // LoadSettings Loads The Sarama & EventingKafka Configuration From The ConfigMap
 // The Provided Context Must Have A Kubernetes Client Associated With It
-func LoadSettings(ctx context.Context, clientId string, configMap map[string]string, getAuthConfig GetAuth) (*commonconfig.EventingKafkaConfig, error) {
+func LoadSettings(
+	ctx context.Context, clientId string, configMap map[string]string, getAuthConfig GetAuth,
+) (*commonconfig.EventingKafkaConfig, error) {
 	// Validate The ConfigMap Data
 	if configMap == nil {
 		return nil, fmt.Errorf("attempted to merge sarama settings with empty configmap")
@@ -179,16 +181,31 @@ func LoadEventingKafkaSettings(configMap map[string]string) (*commonconfig.Event
 		// Upgrade didn't produce an EventingKafkaConfig, so assume it is the current version
 
 		// Unmarshal The Eventing-Kafka ConfigMap YAML Into A EventingKafkaSettings Struct
-		eventingKafkaConfig = &commonconfig.EventingKafkaConfig{}
-		err := yaml.Unmarshal([]byte(configMap[constants.EventingKafkaSettingsConfigKey]), &eventingKafkaConfig)
+		eventingKafkaConfig = &commonconfig.EventingKafkaConfig{
+			Kafka: commonconfig.EKKafkaConfig{
+				AuthSecretNamespace: system.Namespace(),
+				AuthSecretName:      DefaultAuthSecretName,
+			},
+		}
+		err := yaml.Unmarshal(
+			[]byte(configMap[constants.EventingKafkaSettingsConfigKey]), &eventingKafkaConfig,
+		)
 		if err != nil {
-			return nil, fmt.Errorf("ConfigMap's eventing-kafka value could not be converted to an EventingKafkaConfig struct: %s : %v", err, configMap[constants.EventingKafkaSettingsConfigKey])
+			return nil, fmt.Errorf(
+				"ConfigMap's eventing-kafka value could not be converted to an EventingKafkaConfig struct: %s : %v",
+				err, configMap[constants.EventingKafkaSettingsConfigKey],
+			)
 		}
 	}
 
 	if eventingKafkaConfig == nil {
 		// A nil config is not valid; create an empty config so that defaults may be set
-		eventingKafkaConfig = &commonconfig.EventingKafkaConfig{}
+		eventingKafkaConfig = &commonconfig.EventingKafkaConfig{
+			Kafka: commonconfig.EKKafkaConfig{
+				AuthSecretNamespace: system.Namespace(),
+				AuthSecretName:      DefaultAuthSecretName,
+			},
+		}
 	}
 
 	// Set Some Default Values If Missing
@@ -201,12 +218,13 @@ func LoadEventingKafkaSettings(configMap map[string]string) (*commonconfig.Event
 		eventingKafkaConfig.CloudEvents.MaxIdleConnsPerHost = constants.DefaultMaxIdleConnsPerHost
 	}
 
-	// Default Replicas To 1 If Not Specified
-	if eventingKafkaConfig.Channel.Receiver.Replicas < 1 {
-		eventingKafkaConfig.Channel.Receiver.Replicas = 1
+	// allow 0 replica for receiver
+	if eventingKafkaConfig.Channel.Receiver.Replicas < 0 {
+		eventingKafkaConfig.Channel.Receiver.Replicas = 0
 	}
-	if eventingKafkaConfig.Channel.Dispatcher.Replicas < 1 {
-		eventingKafkaConfig.Channel.Dispatcher.Replicas = 1
+	// this will not take effect since it's configured in kafkachannel
+	if eventingKafkaConfig.Channel.Dispatcher.Replicas < 0 {
+		eventingKafkaConfig.Channel.Dispatcher.Replicas = 0
 	}
 
 	// Set Default Values For Secret

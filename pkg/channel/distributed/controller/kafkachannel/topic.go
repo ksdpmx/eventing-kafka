@@ -19,6 +19,7 @@ package kafkachannel
 import (
 	"context"
 	"fmt"
+	"knative.dev/eventing-kafka/pkg/channel/distributed/controller/constants"
 	"strconv"
 
 	"github.com/Shopify/sarama"
@@ -28,7 +29,6 @@ import (
 	"knative.dev/pkg/logging"
 
 	kafkav1beta1 "knative.dev/eventing-kafka/pkg/apis/messaging/v1beta1"
-	"knative.dev/eventing-kafka/pkg/channel/distributed/controller/constants"
 	"knative.dev/eventing-kafka/pkg/channel/distributed/controller/event"
 	"knative.dev/eventing-kafka/pkg/channel/distributed/controller/util"
 	commonconstants "knative.dev/eventing-kafka/pkg/common/constants"
@@ -36,6 +36,7 @@ import (
 
 // reconcileKafkaTopic Reconciles The Kafka Topic Associated With The Specified Channel
 func (r *Reconciler) reconcileKafkaTopic(ctx context.Context, channel *kafkav1beta1.KafkaChannel) error {
+	tenant := channel.Spec.Tenant
 
 	// Get The TopicName For Specified Channel
 	topicName := util.TopicName(channel)
@@ -49,17 +50,23 @@ func (r *Reconciler) reconcileKafkaTopic(ctx context.Context, channel *kafkav1be
 	retentionDuration, err := channel.Spec.ParseRetentionDuration()
 	if err != nil {
 		// Should never happen with webhook defaulting and validation in place.
-		logger.Error("Failed To Parse RetentionDuration Using Default Value Instead", zap.String("RetentionDuration", channel.Spec.RetentionDuration), zap.Error(err))
+		logger.Error(
+			"Failed To Parse RetentionDuration Using Default Value Instead",
+			zap.String("RetentionDuration", channel.Spec.RetentionDuration), zap.Error(err),
+		)
 		retentionDuration = commonconstants.DefaultRetentionDuration
 	}
 	retentionMillis := retentionDuration.Milliseconds()
 
 	// Create The Topic (Handles Case Where Already Exists)
-	err = r.createTopic(ctx, topicName, numPartitions, replicationFactor, retentionMillis)
+	err = r.createTopic(ctx, topicName, numPartitions, replicationFactor, retentionMillis, tenant)
 
 	// Log Results & Return Status
 	if err != nil {
-		controller.GetEventRecorder(ctx).Eventf(channel, corev1.EventTypeWarning, event.KafkaTopicReconciliationFailed.String(), "Failed To Reconcile Kafka Topic For Channel: %v", err)
+		controller.GetEventRecorder(ctx).Eventf(
+			channel, corev1.EventTypeWarning, event.KafkaTopicReconciliationFailed.String(),
+			"Failed To Reconcile Kafka Topic For Channel: %v", err,
+		)
 		logger.Error("Failed To Reconcile Kafka Topic", zap.Error(err))
 		channel.Status.MarkTopicFailed("TopicFailed", fmt.Sprintf("Channel Kafka Topic Failed: %s", err))
 	} else {
@@ -71,6 +78,7 @@ func (r *Reconciler) reconcileKafkaTopic(ctx context.Context, channel *kafkav1be
 
 // finalizeKafkaTopic Finalizes The Kafka Topic Associated With The Specified Channel
 func (r *Reconciler) finalizeKafkaTopic(ctx context.Context, channel *kafkav1beta1.KafkaChannel) error {
+	tenant := channel.Spec.Tenant
 
 	// Get The TopicName For Specified Channel
 	topicName := util.TopicName(channel)
@@ -79,7 +87,7 @@ func (r *Reconciler) finalizeKafkaTopic(ctx context.Context, channel *kafkav1bet
 	logger := logging.FromContext(ctx).Desugar().With(zap.String("TopicName", topicName))
 
 	// Delete The Kafka Topic & Handle Error Response
-	err := r.deleteTopic(ctx, topicName)
+	err := r.deleteTopic(ctx, topicName, tenant)
 	if err != nil {
 		logger.Error("Failed To Finalize Kafka Topic", zap.Error(err))
 		return err
@@ -90,7 +98,10 @@ func (r *Reconciler) finalizeKafkaTopic(ctx context.Context, channel *kafkav1bet
 }
 
 // createTopic Creates The Specified Kafka Topic
-func (r *Reconciler) createTopic(ctx context.Context, topicName string, partitions int32, replicationFactor int16, retentionMillis int64) error {
+func (r *Reconciler) createTopic(
+	ctx context.Context, topicName string, partitions int32, replicationFactor int16, retentionMillis int64,
+	tenant string,
+) error {
 
 	// Get The Logger From The Context
 	logger := logging.FromContext(ctx)
@@ -107,7 +118,7 @@ func (r *Reconciler) createTopic(ctx context.Context, topicName string, partitio
 	}
 
 	// Attempt To Create The Topic & Process TopicError Results (Including Success ;)
-	err := r.adminClient.CreateTopic(ctx, topicName, topicDetail)
+	err := r.adminClients[tenant].CreateTopic(ctx, topicName, topicDetail)
 	if err != nil {
 		logger := logger.With(zap.Int16("KError", int16(err.Err)))
 		switch err.Err {
@@ -128,13 +139,12 @@ func (r *Reconciler) createTopic(ctx context.Context, topicName string, partitio
 }
 
 // deleteTopic Deletes The Specified Kafka Topic
-func (r *Reconciler) deleteTopic(ctx context.Context, topicName string) error {
+func (r *Reconciler) deleteTopic(ctx context.Context, topicName, tenant string) error {
 
 	// Get The Logger From The Context
 	logger := logging.FromContext(ctx)
 
-	// Attempt To Delete The Topic & Process Results
-	err := r.adminClient.DeleteTopic(ctx, topicName)
+	err := r.adminClients[tenant].DeleteTopic(ctx, topicName)
 	if err != nil {
 		logger := logger.With(zap.Int16("KError", int16(err.Err)))
 		switch err.Err {

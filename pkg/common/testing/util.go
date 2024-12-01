@@ -17,6 +17,7 @@ limitations under the License.
 package testing
 
 import (
+	"encoding/json"
 	"os"
 	"testing"
 
@@ -30,11 +31,21 @@ import (
 
 // GetTestSaramaConfigMap Returns A ConfigMap Containing The Desired Sarama Config YAML
 func GetTestSaramaConfigMap(version string, saramaConfig string, configuration string) *corev1.ConfigMap {
-	return GetTestSaramaConfigMapNamespaced(version, constants.SettingsConfigMapName, system.Namespace(), saramaConfig, configuration)
+	return GetTestSaramaConfigMapNamespaced(
+		version, constants.SettingsConfigMapName, system.Namespace(), saramaConfig, configuration,
+	)
+}
+
+func GetTestSaramaConfigMapWithTenant(version, saramaConfig, configuration string) *corev1.ConfigMap {
+	return GetTestSaramaConfigMapNamespacedWithTenant(
+		version, constants.SettingsConfigMapName, system.Namespace(), saramaConfig, configuration,
+	)
 }
 
 // GetTestSaramaSecret Returns A Secret Containing The Desired Fields
-func GetTestSaramaSecret(name string, username string, password string, namespace string, saslType string) *corev1.Secret {
+func GetTestSaramaSecret(
+	name string, username string, password string, namespace string, saslType string,
+) *corev1.Secret {
 	return &corev1.Secret{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Secret",
@@ -68,6 +79,30 @@ func GetTestSaramaConfigMapNamespaced(version, name, namespace, saramaConfig, co
 			constants.VersionConfigKey:               version,
 			constants.SaramaSettingsConfigKey:        saramaConfig,
 			constants.EventingKafkaSettingsConfigKey: configuration,
+		},
+	}
+}
+
+func GetTestSaramaConfigMapNamespacedWithTenant(version, name, namespace, saramaConfig, configuration string) *corev1.ConfigMap {
+	data, _ := json.Marshal(
+		map[string]string{
+			constants.VersionConfigKey:               version,
+			constants.SaramaSettingsConfigKey:        saramaConfig,
+			constants.EventingKafkaSettingsConfigKey: configuration,
+		},
+	)
+	return &corev1.ConfigMap{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "ConfigMap",
+			APIVersion: corev1.SchemeGroupVersion.String(),
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Data: map[string]string{
+			"default": string(data),
+			"cnsp":    string(data),
 		},
 	}
 }

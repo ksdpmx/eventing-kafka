@@ -93,12 +93,17 @@ func TestReceiverDnsSafeName(t *testing.T) {
 
 	// Perform The Test
 	differentPrefix := testPrefix + "-different"
-	actualTest1Result := ReceiverDnsSafeName(testPrefix)
-	actualTest2Result := ReceiverDnsSafeName(differentPrefix)
+	actualTest1Result := ReceiverDnsSafeName(testPrefix, "default")
+	actualTest2Result := ReceiverDnsSafeName(differentPrefix, "default")
 
 	// Verify The Results
-	assert.Equal(t, fmt.Sprintf("%s-%s-receiver", strings.ToLower(testPrefix), GenerateHash(testPrefix, 8)), actualTest1Result)
-	assert.Equal(t, fmt.Sprintf("%s-%s-receiver", strings.ToLower(differentPrefix), GenerateHash(differentPrefix, 8)), actualTest2Result)
+	assert.Equal(
+		t, fmt.Sprintf("%s-%s-receiver", strings.ToLower(testPrefix), GenerateHash(testPrefix, 8)), actualTest1Result,
+	)
+	assert.Equal(
+		t, fmt.Sprintf("%s-%s-receiver", strings.ToLower(differentPrefix), GenerateHash(differentPrefix, 8)),
+		actualTest2Result,
+	)
 	assert.NotEqual(t, actualTest1Result, actualTest2Result)
 }
 

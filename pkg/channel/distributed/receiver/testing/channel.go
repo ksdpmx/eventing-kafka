@@ -47,6 +47,7 @@ func CreateKafkaChannel(name string, namespace string, ready corev1.ConditionSta
 			Namespace: namespace,
 		},
 		Spec: kafkav1beta1.KafkaChannelSpec{
+			Tenant:            "default",
 			NumPartitions:     0,
 			ReplicationFactor: 0,
 			ChannelableSpec:   eventingduck.ChannelableSpec{},

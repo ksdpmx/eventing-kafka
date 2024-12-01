@@ -16,6 +16,10 @@ limitations under the License.
 
 package constants
 
+import (
+	"knative.dev/eventing-kafka/pkg/apis/kafka"
+)
+
 const (
 
 	// Component For Sarama Config
@@ -68,11 +72,13 @@ const (
 
 	// Labels
 	AppLabel                    = "app"
+	IsManagedLabel              = kafka.GroupName + "/is-managed"
 	KafkaChannelNameLabel       = "kafkachannel-name"
 	KafkaChannelNamespaceLabel  = "kafkachannel-namespace"
-	KafkaChannelReceiverLabel   = "kafkachannel-receiver"   // Receiver Label - Used To Mark Deployment As Receiver
-	KafkaChannelDispatcherLabel = "kafkachannel-dispatcher" // Dispatcher Label - Used To Mark Deployment As Dispatcher
-	KafkaTopicLabel             = "kafkaTopic"              // Topic Label - Indicates The Kafka Topic Of The KnativeChannel
+	KafkaChannelReceiverLabel   = "kafkachannel-receiver"     // Receiver Label - Used To Mark Deployment As Receiver
+	KafkaChannelDispatcherLabel = "kafkachannel-dispatcher"   // Dispatcher Label - Used To Mark Deployment As Dispatcher
+	KafkaTopicLabel             = "kafkaTopic"                // Topic Label - Indicates The Kafka Topic Of The KnativeChannel
+	KafkaChannelTenant          = kafka.GroupName + "/tenant" // Tenant Label - Used To Group Channels By Tenant
 
 	// Prometheus ServiceMonitor Selector Labels / Values
 	K8sAppChannelSelectorLabel    = "k8s-app"

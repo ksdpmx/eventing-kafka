@@ -19,6 +19,7 @@ package kafkachannel
 import (
 	"context"
 	"fmt"
+	"k8s.io/utils/pointer"
 	"strconv"
 	"time"
 
@@ -45,14 +46,23 @@ import (
 )
 
 // reconcileReceiver Reconciles The Receiver (Kafka Producer) For The Specified KafkaChannel
+// there's no need to reconcile receiver during channel reconciliation
 func (r *Reconciler) reconcileReceiver(ctx context.Context, channel *v1beta1.KafkaChannel) error {
+	tenant := channel.Spec.Tenant
 
 	secretExists := true
-	secret, err := r.kubeClientset.CoreV1().Secrets(r.config.Kafka.AuthSecretNamespace).Get(ctx, r.config.Kafka.AuthSecretName, metav1.GetOptions{})
+
+	secret, err := r.kubeClientset.CoreV1().Secrets(r.configs[tenant].Kafka.AuthSecretNamespace).Get(
+		ctx, r.configs[tenant].Kafka.AuthSecretName, metav1.GetOptions{},
+	)
 	if err != nil && errors.IsNotFound(err) {
 		// The Service and Deployment reconciler functions need the namespace and name in order to remove
 		// the resources, so construct a Secret with the required values even though it couldn't be found
-		secret = &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: r.config.Kafka.AuthSecretName, Namespace: r.config.Kafka.AuthSecretNamespace}}
+		secret = &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: r.configs[tenant].Kafka.AuthSecretName, Namespace: r.configs[tenant].Kafka.AuthSecretNamespace,
+			},
+		}
 		secretExists = false
 	} else if err != nil {
 		logging.FromContext(ctx).Error("Error reading receiver secret", zap.Error(err))
@@ -60,44 +70,68 @@ func (r *Reconciler) reconcileReceiver(ctx context.Context, channel *v1beta1.Kaf
 	}
 
 	// Get A Logger With Secret Info
-	logger := logging.FromContext(ctx).Desugar().With(zap.String("Secret", fmt.Sprintf("%s/%s", secret.Namespace, secret.Name)))
+	logger := logging.FromContext(ctx).Desugar().With(
+		zap.String(
+			"Secret", fmt.Sprintf("%s/%s", secret.Namespace, secret.Name),
+		),
+	)
 
-	// Reconcile The Receiver Service
-	serviceErr := r.reconcileReceiverService(ctx, logger, secret, secretExists)
+	// checking wisb
+	oldMCM, err := r.kubeClientset.CoreV1().ConfigMaps(r.environment.SystemNamespace).Get(ctx, commonconstants.SettingsConfigMapName+"-"+tenant, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	oldMCMUID := oldMCM.GetUID()
+
+	var serviceErr, deploymentErr error
+	serviceErr = r.reconcileReceiverService(ctx, logger, secret, secretExists, channel, oldMCMUID)
 	if serviceErr != nil {
-		controller.GetEventRecorder(ctx).Eventf(secret, corev1.EventTypeWarning, event.ReceiverServiceReconciliationFailed.String(), "Failed To Reconcile Receiver Service: %v", serviceErr)
+		controller.GetEventRecorder(ctx).Eventf(
+			secret, corev1.EventTypeWarning, event.ReceiverServiceReconciliationFailed.String(),
+			"Failed To Reconcile Receiver Service: %v", serviceErr,
+		)
 		logger.Error("Failed To Reconcile Receiver Service", zap.Error(serviceErr))
 	} else {
 		logger.Info("Successfully Reconciled Receiver Service")
 	}
-
-	// Reconcile The Receiver Deployment
-	deploymentErr := r.reconcileReceiverDeployment(ctx, logger, secret, secretExists)
+	deploymentErr = r.reconcileReceiverDeployment(ctx, logger, secret, secretExists, channel, oldMCMUID)
 	if deploymentErr != nil {
-		controller.GetEventRecorder(ctx).Eventf(secret, corev1.EventTypeWarning, event.ReceiverDeploymentReconciliationFailed.String(), "Failed To Reconcile Receiver Deployment: %v", deploymentErr)
+		controller.GetEventRecorder(ctx).Eventf(
+			secret, corev1.EventTypeWarning, event.ReceiverDeploymentReconciliationFailed.String(),
+			"Failed To Reconcile Receiver Deployment: %v", deploymentErr,
+		)
 		logger.Error("Failed To Reconcile Receiver Deployment", zap.Error(deploymentErr))
 	} else {
 		logger.Info("Successfully Reconciled Receiver Deployment")
 	}
-
 	if serviceErr == nil && !secretExists {
 		serviceErr = fmt.Errorf("no secret found")
 	}
-
 	if deploymentErr == nil && !secretExists {
 		deploymentErr = fmt.Errorf("no secret found")
 	}
 
-	// Update  KafkaChannel's Receiver Status
-	statusErr := r.updateKafkaChannelReceiverStatus(ctx,
-		channel,
-		serviceErr == nil, event.ReceiverServiceReconciliationFailed.String(), fmt.Sprintf("Receiver Service Failed: %v", serviceErr),
-		deploymentErr == nil, event.ReceiverDeploymentReconciliationFailed.String(), fmt.Sprintf("Receiver Deployment Failed: %v", deploymentErr))
-	if statusErr != nil {
-		controller.GetEventRecorder(ctx).Eventf(secret, corev1.EventTypeWarning, event.ChannelStatusReconciliationFailed.String(), "Failed To Reconcile Channel's KafkaChannel Status: %v", statusErr)
-		logger.Error("Failed To Reconcile KafkaChannel Status", zap.Error(statusErr))
-	} else {
-		logger.Info("Successfully Reconciled KafkaChannel Status")
+	// there's no need to update kc status for dummy
+	var statusErr error
+	if channel.Name != "dummy" {
+		// Update KafkaChannel's Receiver Status
+		statusErr = r.updateKafkaChannelReceiverStatus(
+			ctx,
+			channel,
+			serviceErr == nil, event.ReceiverServiceReconciliationFailed.String(),
+			fmt.Sprintf("Receiver Service Failed: %v", serviceErr),
+			deploymentErr == nil, event.ReceiverDeploymentReconciliationFailed.String(),
+			fmt.Sprintf("Receiver Deployment Failed: %v", deploymentErr),
+		)
+		if statusErr != nil {
+			controller.GetEventRecorder(ctx).Eventf(
+				secret, corev1.EventTypeWarning, event.ChannelStatusReconciliationFailed.String(),
+				"Failed To Reconcile Channel's KafkaChannel Status: %v", statusErr,
+			)
+			logger.Error("Failed To Reconcile KafkaChannel Status", zap.Error(statusErr))
+		} else {
+			logger.Info("Successfully Reconciled KafkaChannel Status")
+		}
 	}
 
 	if !secretExists {
@@ -119,19 +153,24 @@ func (r *Reconciler) reconcileReceiver(ctx context.Context, channel *v1beta1.Kaf
 //
 
 // reconcileReceiverService Reconciles The Receiver Service
-func (r *Reconciler) reconcileReceiverService(ctx context.Context, logger *zap.Logger, secret *corev1.Secret, secretExists bool) error {
+func (r *Reconciler) reconcileReceiverService(
+	ctx context.Context, logger *zap.Logger, secret *corev1.Secret, secretExists bool, channel *v1beta1.KafkaChannel, uid types.UID,
+) error {
+	tenant := channel.Spec.Tenant
 
 	// Create A New Service For Comparison
-	newService := r.newReceiverService()
+	newService := r.newReceiverService(tenant, uid)
 
 	// Attempt To Get The Receiver Service Associated With The Specified Secret
-	existingService, err := r.getReceiverService()
+	existingService, err := r.getReceiverService(tenant)
 
 	if !secretExists {
 		// If there is no secret, the receiver service must be deleted (if it exists)
 		if existingService != nil {
 			logger.Info("Secret Removed - Deleting Receiver Service")
-			return r.kubeClientset.CoreV1().Services(newService.Namespace).Delete(ctx, newService.Name, metav1.DeleteOptions{})
+			return r.kubeClientset.CoreV1().Services(newService.Namespace).Delete(
+				ctx, newService.Name, metav1.DeleteOptions{},
+			)
 		}
 		return nil // No secret, no service, no change
 	}
@@ -143,7 +182,9 @@ func (r *Reconciler) reconcileReceiverService(ctx context.Context, logger *zap.L
 
 			// Then Create The New Receiver Service
 			logger.Info("Receiver Service Not Found - Creating New One")
-			_, err = r.kubeClientset.CoreV1().Services(newService.Namespace).Create(ctx, newService, metav1.CreateOptions{})
+			_, err = r.kubeClientset.CoreV1().Services(newService.Namespace).Update(
+				ctx, newService, metav1.UpdateOptions{},
+			)
 			if err != nil {
 				logger.Error("Failed To Create Receiver Service", zap.Error(err))
 				return err
@@ -164,22 +205,26 @@ func (r *Reconciler) reconcileReceiverService(ctx context.Context, logger *zap.L
 		if existingService.DeletionTimestamp.IsZero() {
 			logger.Info("Successfully Verified Receiver Service")
 		} else {
-			logger.Warn("Encountered Receiver Service With DeletionTimestamp - Forcing Reconciliation", zap.String("Namespace", existingService.Namespace), zap.String("Name", existingService.Name))
-			return fmt.Errorf("encountered Receiver Service with DeletionTimestamp %s/%s - potential race condition", existingService.Namespace, existingService.Name)
+			logger.Warn(
+				"Encountered Receiver Service With DeletionTimestamp - Forcing Reconciliation",
+				zap.String("Namespace", existingService.Namespace), zap.String("Name", existingService.Name),
+			)
+			return fmt.Errorf(
+				"encountered Receiver Service with DeletionTimestamp %s/%s - potential race condition",
+				existingService.Namespace, existingService.Name,
+			)
 		}
 
 		// Determine whether the existing service is different in a way that demands a patch
 		// such as missing required labels or spec differences
 		patch, needsUpdate := util.CheckServiceChanged(logger, existingService, newService)
-
-		// Patch the service in Kubernetes if necessary
 		if needsUpdate {
-			_, err = r.kubeClientset.CoreV1().Services(existingService.Namespace).Patch(ctx, existingService.Name, types.JSONPatchType, patch, metav1.PatchOptions{})
+			_, err = r.kubeClientset.CoreV1().Services(existingService.Namespace).Patch(
+				ctx, existingService.Name, types.JSONPatchType, patch, metav1.PatchOptions{},
+			)
 			if err == nil {
-				controller.GetEventRecorder(ctx).Event(secret, corev1.EventTypeNormal, event.ReceiverServicePatched.String(), "Receiver Service Patched")
-				logger.Info("Receiver Service Changed - Patch Applied")
+				logger.Warn("Receiver Service Changed - Patch Applied")
 			} else {
-				controller.GetEventRecorder(ctx).Event(secret, corev1.EventTypeWarning, event.ReceiverServicePatchFailed.String(), "Receiver Service Patch Failed")
 				logger.Error("Receiver Service Patch Failed", zap.Error(err))
 				return err
 			}
@@ -189,12 +234,11 @@ func (r *Reconciler) reconcileReceiverService(ctx context.Context, logger *zap.L
 }
 
 // getReceiverService Gets The Kafka Receiver Service Associated With The Specified Channel
-func (r *Reconciler) getReceiverService() (*corev1.Service, error) {
+func (r *Reconciler) getReceiverService(tenant string) (*corev1.Service, error) {
 
 	// Get The (Single) Receiver Deployment Name - Use Same For Service
-	deploymentName := util.ReceiverDnsSafeName(r.config.Kafka.AuthSecretName)
+	deploymentName := util.ReceiverDnsSafeName(r.configs[tenant].Kafka.AuthSecretName, tenant)
 
-	// Get The Receiver Service By Namespace / Name
 	service, err := r.serviceLister.Services(r.environment.SystemNamespace).Get(deploymentName)
 
 	// Return The Results
@@ -202,12 +246,14 @@ func (r *Reconciler) getReceiverService() (*corev1.Service, error) {
 }
 
 // newReceiverService Creates The Receiver Service Model For The Specified Secret
-func (r *Reconciler) newReceiverService() *corev1.Service {
+func (r *Reconciler) newReceiverService(tenant string, uid types.UID) *corev1.Service {
 
 	// Get The (Single) Receiver Deployment Name - Use Same For Service
-	deploymentName := util.ReceiverDnsSafeName(r.config.Kafka.AuthSecretName)
+	deploymentName := util.ReceiverDnsSafeName(r.configs[tenant].Kafka.AuthSecretName, tenant)
 
 	// Create A New Receiver Service
+	internalTrafficPolicy := corev1.ServiceInternalTrafficPolicyCluster
+	ipFamilyPolicy := corev1.IPFamilyPolicySingleStack
 	service := &corev1.Service{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: corev1.SchemeGroupVersion.String(),
@@ -219,9 +265,24 @@ func (r *Reconciler) newReceiverService() *corev1.Service {
 			Labels: map[string]string{
 				constants.KafkaChannelReceiverLabel:  "true",                               // Allows for identification of Receivers
 				constants.K8sAppChannelSelectorLabel: constants.K8sAppChannelSelectorValue, // Prometheus ServiceMonitor
+				constants.IsManagedLabel:             "true",
+				constants.KafkaChannelTenant:         tenant,
+			},
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion:         corev1.SchemeGroupVersion.String(),
+					Kind:               "ConfigMap",
+					Name:               commonconstants.SettingsConfigMapName + "-" + tenant,
+					UID:                uid,
+					Controller:         pointer.BoolPtr(true),
+					BlockOwnerDeletion: pointer.BoolPtr(true),
+				},
 			},
 		},
 		Spec: corev1.ServiceSpec{
+			IPFamilies:            []corev1.IPFamily{corev1.IPv4Protocol},
+			IPFamilyPolicy:        &ipFamilyPolicy,
+			InternalTrafficPolicy: &internalTrafficPolicy,
 			Ports: []corev1.ServicePort{
 				{
 					Name:       constants.HttpPortName,
@@ -236,13 +297,16 @@ func (r *Reconciler) newReceiverService() *corev1.Service {
 			},
 			Selector: map[string]string{
 				constants.AppLabel: deploymentName, // Matches Deployment Label Key/Value
+				// constants.KafkaChannelTenant: tenant,
 			},
 		},
 	}
 
 	// Update The Receiver Service's Annotations & Labels With Custom Config Values
-	service.Annotations = commonconfig.JoinStringMaps(service.Annotations, r.config.Channel.Receiver.ServiceAnnotations)
-	service.Labels = commonconfig.JoinStringMaps(service.Labels, r.config.Channel.Receiver.ServiceLabels)
+	service.Annotations = commonconfig.JoinStringMaps(
+		service.Annotations, r.configs[tenant].Channel.Receiver.ServiceAnnotations,
+	)
+	service.Labels = commonconfig.JoinStringMaps(service.Labels, r.configs[tenant].Channel.Receiver.ServiceLabels)
 
 	// Return The Receiver Service
 	return service
@@ -253,32 +317,37 @@ func (r *Reconciler) newReceiverService() *corev1.Service {
 //
 
 // reconcileReceiverDeployment Reconciles The Receiver Deployment
-func (r *Reconciler) reconcileReceiverDeployment(ctx context.Context, logger *zap.Logger, secret *corev1.Secret, secretExists bool) error {
+func (r *Reconciler) reconcileReceiverDeployment(
+	ctx context.Context, logger *zap.Logger, secret *corev1.Secret, secretExists bool, channel *v1beta1.KafkaChannel, uid types.UID,
+) error {
+	tenant := channel.Spec.Tenant
 
 	// Create A New Deployment For Comparison
-	newDeployment := r.newReceiverDeployment(secret)
+	newDeployment := r.newReceiverDeployment(secret, channel, uid)
 
 	// Attempt To Get The Receiver Deployment Associated With The Specified Secret
-	existingDeployment, err := r.getReceiverDeployment()
+	existingDeployment, err := r.getReceiverDeployment(tenant)
 
 	if !secretExists {
 		// If there is no secret, the receiver deployment must be deleted (if it exists)
 		if existingDeployment != nil {
 			logger.Info("Secret Removed - Deleting Receiver Deployment")
-			return r.kubeClientset.AppsV1().Deployments(newDeployment.Namespace).Delete(ctx, newDeployment.Name, metav1.DeleteOptions{})
+			return r.kubeClientset.AppsV1().Deployments(newDeployment.Namespace).Delete(
+				ctx, newDeployment.Name, metav1.DeleteOptions{},
+			)
 		}
 		return nil // No secret, no deployment, no change
 	}
 
 	if existingDeployment == nil || err != nil {
-
 		// If The Receiver Deployment Was Not Found - Then Create A New Deployment For The Secret
 		if errors.IsNotFound(err) {
-
 			// Then Create The New Receiver Deployment
 			logger.Info("Receiver Deployment Not Found - Creating New One")
 
-			_, err = r.kubeClientset.AppsV1().Deployments(newDeployment.Namespace).Create(ctx, newDeployment, metav1.CreateOptions{})
+			_, err = r.kubeClientset.AppsV1().Deployments(newDeployment.Namespace).Create(
+				ctx, newDeployment, metav1.CreateOptions{},
+			)
 			if err != nil {
 				logger.Error("Failed To Create Receiver Deployment", zap.Error(err))
 				return err
@@ -286,36 +355,39 @@ func (r *Reconciler) reconcileReceiverDeployment(ctx context.Context, logger *za
 				logger.Info("Successfully Created Receiver Deployment")
 				return nil
 			}
-
 		} else {
-
 			// Failed In Attempt To Get Receiver Deployment From K8S
 			logger.Error("Failed To Get Receiver Deployment", zap.Error(err))
 			return err
 		}
 	} else {
-
 		// Verify Receiver Deployment Is Not Terminating
 		if existingDeployment.DeletionTimestamp.IsZero() {
 			logger.Info("Successfully Verified Receiver Deployment")
 		} else {
-			logger.Warn("Encountered Receiver Deployment With DeletionTimestamp - Forcing Reconciliation", zap.String("Namespace", existingDeployment.Namespace), zap.String("Name", existingDeployment.Name))
-			return fmt.Errorf("encountered Receiver Deployment with DeletionTimestamp %s/%s - potential race condition", existingDeployment.Namespace, existingDeployment.Name)
+			logger.Warn(
+				"Encountered Receiver Deployment With DeletionTimestamp - Forcing Reconciliation",
+				zap.String("Namespace", existingDeployment.Namespace), zap.String("Name", existingDeployment.Name),
+			)
+			return fmt.Errorf(
+				"encountered Receiver Deployment with DeletionTimestamp %s/%s - potential race condition",
+				existingDeployment.Namespace, existingDeployment.Name,
+			)
 		}
 
 		// Determine whether the existing deployment is different in a way that demands an update
 		// such as missing required labels, a different image, or certain container differences.
-		// (This includes the configmap hash annotation, so configmap changes will trigger updates)
+		// configmap hash has been removed to avoid unnecessary rolling updates.
 		updatedDeployment, needsUpdate := util.CheckDeploymentChanged(logger, existingDeployment, newDeployment)
 
 		// Update the deployment in Kubernetes if necessary
 		if needsUpdate {
-			_, err = r.kubeClientset.AppsV1().Deployments(newDeployment.Namespace).Update(ctx, updatedDeployment, metav1.UpdateOptions{})
+			_, err = r.kubeClientset.AppsV1().Deployments(newDeployment.Namespace).Update(
+				ctx, updatedDeployment, metav1.UpdateOptions{},
+			)
 			if err == nil {
-				controller.GetEventRecorder(ctx).Event(secret, corev1.EventTypeNormal, event.ReceiverDeploymentUpdated.String(), "Receiver Deployment Updated")
-				logger.Info("Receiver Deployment Changed - Update Applied")
+				logger.Warn("Receiver Deployment Changed - Update Applied", zap.String("tenant", tenant))
 			} else {
-				controller.GetEventRecorder(ctx).Event(secret, corev1.EventTypeWarning, event.ReceiverDeploymentUpdateFailed.String(), "Receiver Deployment Update Failed")
 				logger.Error("Receiver Deployment Update Failed", zap.Error(err))
 				return err
 			}
@@ -325,10 +397,9 @@ func (r *Reconciler) reconcileReceiverDeployment(ctx context.Context, logger *za
 }
 
 // getReceiverDeployment Gets The Receiver Deployment Associated With The Specified Secret
-func (r *Reconciler) getReceiverDeployment() (*appsv1.Deployment, error) {
-
+func (r *Reconciler) getReceiverDeployment(tenant string) (*appsv1.Deployment, error) {
 	// Get The (Single) Receiver Deployment Name
-	deploymentName := util.ReceiverDnsSafeName(r.config.Kafka.AuthSecretName)
+	deploymentName := util.ReceiverDnsSafeName(r.configs[tenant].Kafka.AuthSecretName, tenant)
 
 	// Get The Receiver Deployment By Namespace / Name
 	deployment, err := r.deploymentLister.Deployments(r.environment.SystemNamespace).Get(deploymentName)
@@ -338,34 +409,39 @@ func (r *Reconciler) getReceiverDeployment() (*appsv1.Deployment, error) {
 }
 
 // newReceiverDeployment creates The Receiver Deployment Model For The Specified Secret
-func (r *Reconciler) newReceiverDeployment(secret *corev1.Secret) *appsv1.Deployment {
+func (r *Reconciler) newReceiverDeployment(
+	secret *corev1.Secret, channel *v1beta1.KafkaChannel, uid types.UID,
+) *appsv1.Deployment {
+	tenant := channel.Spec.Tenant
 
 	// Get The (Single) Receiver Deployment Name
-	deploymentName := util.ReceiverDnsSafeName(r.config.Kafka.AuthSecretName)
+	deploymentName := util.ReceiverDnsSafeName(r.configs[tenant].Kafka.AuthSecretName, tenant)
 
 	// Replicas Int Value For De-Referencing
-	replicas := int32(r.config.Channel.Receiver.Replicas)
+	replicas := int32(r.configs[tenant].Channel.Receiver.Replicas)
+	nodeSelector := r.configs[tenant].Channel.Receiver.NodeSelector
+	affinity := r.configs[tenant].Channel.Receiver.Affinity
 
 	// Create The Receiver Container Environment Variables
-	channelEnvVars := r.receiverDeploymentEnvVars(secret)
+	channelEnvVars := r.receiverDeploymentEnvVars(secret, tenant)
 
 	// There is a difference between setting an entry in the limits or requests map to the zero-value
 	// of a Quantity and not actually having that entry in the map at all.
 	// If we want "no limit" or "no request" then the entry must not be present in the map.
 	// Note: Since a "Quantity" type has no nil value, we use the Zero value to represent unlimited.
 	resourceLimits := make(map[corev1.ResourceName]resource.Quantity)
-	if !r.config.Channel.Receiver.MemoryLimit.IsZero() {
-		resourceLimits[corev1.ResourceMemory] = r.config.Channel.Receiver.MemoryLimit
+	if !r.configs[tenant].Channel.Receiver.MemoryLimit.IsZero() {
+		resourceLimits[corev1.ResourceMemory] = r.configs[tenant].Channel.Receiver.MemoryLimit
 	}
-	if !r.config.Channel.Receiver.CpuLimit.IsZero() {
-		resourceLimits[corev1.ResourceCPU] = r.config.Channel.Receiver.CpuLimit
+	if !r.configs[tenant].Channel.Receiver.CpuLimit.IsZero() {
+		resourceLimits[corev1.ResourceCPU] = r.configs[tenant].Channel.Receiver.CpuLimit
 	}
 	resourceRequests := make(map[corev1.ResourceName]resource.Quantity)
-	if !r.config.Channel.Receiver.MemoryRequest.IsZero() {
-		resourceRequests[corev1.ResourceMemory] = r.config.Channel.Receiver.MemoryRequest
+	if !r.configs[tenant].Channel.Receiver.MemoryRequest.IsZero() {
+		resourceRequests[corev1.ResourceMemory] = r.configs[tenant].Channel.Receiver.MemoryRequest
 	}
-	if !r.config.Channel.Receiver.CpuRequest.IsZero() {
-		resourceRequests[corev1.ResourceCPU] = r.config.Channel.Receiver.CpuRequest
+	if !r.configs[tenant].Channel.Receiver.CpuRequest.IsZero() {
+		resourceRequests[corev1.ResourceCPU] = r.configs[tenant].Channel.Receiver.CpuRequest
 	}
 
 	// If either the limits or requests are an entirely-empty map, this will be translated to a nil
@@ -390,6 +466,18 @@ func (r *Reconciler) newReceiverDeployment(secret *corev1.Secret) *appsv1.Deploy
 			Labels: map[string]string{
 				constants.AppLabel:                  deploymentName, // Matches Service Selector Key/Value Below
 				constants.KafkaChannelReceiverLabel: "true",         // Allows for identification of Receiver Deployments
+				constants.IsManagedLabel:            "true",
+				constants.KafkaChannelTenant:        tenant,
+			},
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion:         corev1.SchemeGroupVersion.String(),
+					Kind:               "ConfigMap",
+					Name:               commonconstants.SettingsConfigMapName + "-" + tenant,
+					UID:                uid,
+					Controller:         pointer.BoolPtr(true),
+					BlockOwnerDeletion: pointer.BoolPtr(true),
+				},
 			},
 		},
 		Spec: appsv1.DeploymentSpec{
@@ -397,6 +485,7 @@ func (r *Reconciler) newReceiverDeployment(secret *corev1.Secret) *appsv1.Deploy
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
 					constants.AppLabel: deploymentName, // Matches Template ObjectMeta Pods
+					// constants.KafkaChannelTenantLabel: tenant,
 				},
 			},
 			Template: corev1.PodTemplateSpec{
@@ -404,10 +493,13 @@ func (r *Reconciler) newReceiverDeployment(secret *corev1.Secret) *appsv1.Deploy
 					Labels: map[string]string{
 						constants.AppLabel:                  deploymentName, // Matched By Deployment Selector Above
 						constants.KafkaChannelReceiverLabel: "true",         // Allows for identification of Receiver Pods
+						// TODO
+						// constants.KafkaChannelTenantLabel: tenant,
 					},
-					Annotations: map[string]string{
-						commonconstants.ConfigMapHashAnnotationKey: r.kafkaConfigMapHash,
-					},
+					// to avoid unnecessary rolling updates by other tenants' changes
+					//Annotations: map[string]string{
+					//	commonconstants.ConfigMapHashAnnotationKey: r.kafkaConfigMapHash,
+					//},
 				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: r.environment.ServiceAccount,
@@ -461,14 +553,19 @@ func (r *Reconciler) newReceiverDeployment(secret *corev1.Secret) *appsv1.Deploy
 							},
 						},
 					},
+					NodeSelector: nodeSelector,
+					Affinity:     affinity,
 					Volumes: []corev1.Volume{
 						{
 							Name: commonconstants.SettingsConfigMapName,
-							VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
-								LocalObjectReference: corev1.LocalObjectReference{
-									Name: commonconstants.SettingsConfigMapName,
+							VolumeSource: corev1.VolumeSource{
+								ConfigMap: &corev1.ConfigMapVolumeSource{
+									DefaultMode: pointer.Int32Ptr(420),
+									LocalObjectReference: corev1.LocalObjectReference{
+										Name: commonconstants.SettingsConfigMapName + "-" + tenant,
+									},
 								},
-							}},
+							},
 						},
 					},
 				},
@@ -477,17 +574,25 @@ func (r *Reconciler) newReceiverDeployment(secret *corev1.Secret) *appsv1.Deploy
 	}
 
 	// Update The Receiver Deployment's Annotations & Labels With Custom Config Values
-	deployment.ObjectMeta.Annotations = commonconfig.JoinStringMaps(deployment.ObjectMeta.Annotations, r.config.Channel.Receiver.DeploymentAnnotations)
-	deployment.ObjectMeta.Labels = commonconfig.JoinStringMaps(deployment.ObjectMeta.Labels, r.config.Channel.Receiver.DeploymentLabels)
-	deployment.Spec.Template.ObjectMeta.Annotations = commonconfig.JoinStringMaps(deployment.Spec.Template.ObjectMeta.Annotations, r.config.Channel.Receiver.PodAnnotations)
-	deployment.Spec.Template.ObjectMeta.Labels = commonconfig.JoinStringMaps(deployment.Spec.Template.ObjectMeta.Labels, r.config.Channel.Receiver.PodLabels)
+	deployment.ObjectMeta.Annotations = commonconfig.JoinStringMaps(
+		deployment.ObjectMeta.Annotations, r.configs[tenant].Channel.Receiver.DeploymentAnnotations,
+	)
+	deployment.ObjectMeta.Labels = commonconfig.JoinStringMaps(
+		deployment.ObjectMeta.Labels, r.configs[tenant].Channel.Receiver.DeploymentLabels,
+	)
+	deployment.Spec.Template.ObjectMeta.Annotations = commonconfig.JoinStringMaps(
+		deployment.Spec.Template.ObjectMeta.Annotations, r.configs[tenant].Channel.Receiver.PodAnnotations,
+	)
+	deployment.Spec.Template.ObjectMeta.Labels = commonconfig.JoinStringMaps(
+		deployment.Spec.Template.ObjectMeta.Labels, r.configs[tenant].Channel.Receiver.PodLabels,
+	)
 
 	// Return The Receiver Deployment
 	return deployment
 }
 
 // receiverDeploymentEnvVars creates The Receiver Deployment's Env Vars
-func (r *Reconciler) receiverDeploymentEnvVars(secret *corev1.Secret) []corev1.EnvVar {
+func (r *Reconciler) receiverDeploymentEnvVars(secret *corev1.Secret, tenant string) []corev1.EnvVar {
 
 	// Create The Receiver Deployment EnvVars
 	envVars := []corev1.EnvVar{
@@ -513,7 +618,7 @@ func (r *Reconciler) receiverDeploymentEnvVars(secret *corev1.Secret) []corev1.E
 		},
 		{
 			Name:  commonenv.ServiceNameEnvVarKey,
-			Value: util.ReceiverDnsSafeName(secret.Name),
+			Value: util.ReceiverDnsSafeName(secret.Name, tenant),
 		},
 		{
 			Name:  commonenv.MetricsPortEnvVarKey,
@@ -534,16 +639,20 @@ func (r *Reconciler) receiverDeploymentEnvVars(secret *corev1.Secret) []corev1.E
 	}
 
 	// Append The Secret Name As Env Var
-	envVars = append(envVars, corev1.EnvVar{
-		Name:  commonenv.KafkaSecretNameEnvVarKey,
-		Value: secret.Name,
-	})
+	envVars = append(
+		envVars, corev1.EnvVar{
+			Name:  commonenv.KafkaSecretNameEnvVarKey,
+			Value: secret.Name,
+		},
+	)
 
 	// Append The Secret Namespace As Env Var
-	envVars = append(envVars, corev1.EnvVar{
-		Name:  commonenv.KafkaSecretNamespaceEnvVarKey,
-		Value: secret.Namespace,
-	})
+	envVars = append(
+		envVars, corev1.EnvVar{
+			Name:  commonenv.KafkaSecretNamespaceEnvVarKey,
+			Value: secret.Namespace,
+		},
+	)
 
 	// Return The Receiver Deployment EnvVars Array
 	return envVars

@@ -29,14 +29,14 @@ import (
 // from the newDeployment as well as a boolean indicator of whether any changes were necessary.
 // Only specific portions of the Deployment are evaluated including...
 //
-//    - ObjectMeta Labels & Annotations
-//    - Spec.Template.ObjectMeta Labels & Annotations
-//    - Spec.Template.Spec.Containers  (excluding certain fields)
+//   - ObjectMeta Labels & Annotations
+//   - Spec.Template.ObjectMeta Labels & Annotations
+//   - Spec.Template.Spec.Containers  (excluding certain fields)
 //
-// Note - Spec.Replicas are ignored to avoid overwriting local HPA configuration.
-//
-func CheckDeploymentChanged(logger *zap.Logger, oldDeployment, newDeployment *appsv1.Deployment) (*appsv1.Deployment, bool) {
-
+// HPA is not supported here. Replicas will be honored.
+func CheckDeploymentChanged(logger *zap.Logger, oldDeployment, newDeployment *appsv1.Deployment) (
+	*appsv1.Deployment, bool,
+) {
 	// Copy The "old" Labels & Annotations For Immutability
 	updatedDeploymentLabels := make(map[string]string)
 	for oldKey, oldValue := range oldDeployment.ObjectMeta.Labels {
@@ -54,6 +54,8 @@ func CheckDeploymentChanged(logger *zap.Logger, oldDeployment, newDeployment *ap
 	for oldKey, oldValue := range oldDeployment.Spec.Template.ObjectMeta.Annotations {
 		updatedTemplateAnnotations[oldKey] = oldValue
 	}
+
+	updatedDeployment := oldDeployment.DeepCopy()
 
 	// Add/Update "new" Labels & Annotations Into "old" Set
 	// Note - We're purposefully not handling "deletes" of labels and annotations from the ConfigMap
@@ -90,9 +92,17 @@ func CheckDeploymentChanged(logger *zap.Logger, oldDeployment, newDeployment *ap
 			updatedTemplateAnnotations[newKey] = newValue
 		}
 	}
-
-	// Fields intentionally ignored:
-	//    Spec.Replicas - Since a HorizontalPodAutoscaler explicitly changes this value on the deployment.
+	// always honor new generated owner references
+	if !cmp.Equal(oldDeployment.ObjectMeta.OwnerReferences, newDeployment.ObjectMeta.OwnerReferences) {
+		metadataChanged = true
+		updatedDeployment.ObjectMeta.OwnerReferences = newDeployment.ObjectMeta.OwnerReferences
+	}
+	if metadataChanged {
+		updatedDeployment.ObjectMeta.Labels = updatedDeploymentLabels
+		updatedDeployment.ObjectMeta.Annotations = updatedDeploymentAnnotations
+		updatedDeployment.Spec.Template.ObjectMeta.Annotations = updatedTemplateAnnotations
+		updatedDeployment.Spec.Template.ObjectMeta.Labels = updatedTemplateLabels
+	}
 
 	// Validate The Old/New Containers
 	if len(oldDeployment.Spec.Template.Spec.Containers) == 0 {
@@ -108,14 +118,11 @@ func CheckDeploymentChanged(logger *zap.Logger, oldDeployment, newDeployment *ap
 	// Verify everything in the container spec aside from some particular exceptions (see "ignoreFields" below)
 	newContainer := &newDeployment.Spec.Template.Spec.Containers[0]
 	oldContainer := findContainer(oldDeployment, newContainer.Name)
-	if oldContainer == nil {
-		logger.Error("Old Deployment Does Not Have Same Container Name - Replacing Entire Deployment")
-		return newDeployment, true
-	}
 	ignoreFields := []cmp.Option{
 		// Ignore the fields in a Container struct which are not set directly by the distributed channel reconcilers
 		// and ones that are acceptable to be changed manually (such as the ImagePullPolicy)
-		cmpopts.IgnoreFields(*newContainer,
+		cmpopts.IgnoreFields(
+			*newContainer,
 			"Lifecycle",
 			"TerminationMessagePolicy",
 			"ImagePullPolicy",
@@ -124,32 +131,38 @@ func CheckDeploymentChanged(logger *zap.Logger, oldDeployment, newDeployment *ap
 			"TerminationMessagePath",
 			"Stdin",
 			"StdinOnce",
-			"TTY"),
+			"TTY",
+		),
 		// Ignore some other fields buried inside otherwise-relevant ones, mainly "defaults that come from empty strings,"
 		// as there is no reason to restart the deployments for those changes.
 		cmpopts.IgnoreFields(corev1.ContainerPort{}, "Protocol"),         // "" -> "TCP"
 		cmpopts.IgnoreFields(corev1.ObjectFieldSelector{}, "APIVersion"), // "" -> "v1"
-		cmpopts.IgnoreFields(corev1.HTTPGetAction{}, "Scheme"),           // "" -> "HTTP" (from inside the probes; always HTTP)
+		cmpopts.IgnoreFields(
+			corev1.HTTPGetAction{}, "Scheme",
+		), // "" -> "HTTP" (from inside the probes; always HTTP)
+	}
+	containersEqual := cmp.Equal(oldContainer, newContainer, ignoreFields...)
+	if !containersEqual {
+		updatedDeployment.Spec.Template.Spec.Containers[0] = *newContainer
 	}
 
-	containersEqual := cmp.Equal(oldContainer, newContainer, ignoreFields...)
-	if containersEqual && !metadataChanged {
-		// Nothing of interest changed, so just keep the old deployment
+	replicasEqual := true
+	if *oldDeployment.Spec.Replicas != *newDeployment.Spec.Replicas {
+		replicasEqual = false
+		updatedDeployment.Spec.Replicas = newDeployment.Spec.Replicas
+	}
+
+	volumesEqual := true
+	// always honor new generated volumes
+	if !cmp.Equal(oldDeployment.Spec.Template.Spec.Volumes, newDeployment.Spec.Template.Spec.Volumes) {
+		volumesEqual = false
+		updatedDeployment.Spec.Template.Spec.Volumes = newDeployment.Spec.Template.Spec.Volumes
+	}
+
+	if !metadataChanged && containersEqual && replicasEqual && volumesEqual {
 		return oldDeployment, false
 	}
 
-	// Create an updated deployment from the old one, but using the new Container field
-	updatedDeployment := oldDeployment.DeepCopy()
-	if metadataChanged {
-		updatedDeployment.ObjectMeta.Labels = updatedDeploymentLabels
-		updatedDeployment.ObjectMeta.Annotations = updatedDeploymentAnnotations
-		updatedDeployment.Spec.Template.ObjectMeta.Annotations = updatedTemplateAnnotations
-		updatedDeployment.Spec.Template.ObjectMeta.Labels = updatedTemplateLabels
-	}
-	if !containersEqual {
-		updatedDeployment.Spec.Template.Spec.Containers[0] = *newContainer
-		updatedDeployment.Spec.Template.Spec.Volumes = newDeployment.Spec.Template.Spec.Volumes
-	}
 	return updatedDeployment, true
 }
 
@@ -177,6 +190,8 @@ func CheckServiceChanged(logger *zap.Logger, oldService, newService *corev1.Serv
 		updatedAnnotations[oldKey] = oldValue
 	}
 
+	updatedService := oldService.DeepCopy()
+
 	// Track MetaData Changed State
 	metadataChanged := false
 
@@ -198,11 +213,20 @@ func CheckServiceChanged(logger *zap.Logger, oldService, newService *corev1.Serv
 			updatedAnnotations[newKey] = newValue
 		}
 	}
+	// always honor new generated owner references
+	if !cmp.Equal(oldService.ObjectMeta.OwnerReferences, newService.ObjectMeta.OwnerReferences) {
+		metadataChanged = true
+		updatedService.ObjectMeta.OwnerReferences = newService.ObjectMeta.OwnerReferences
+	}
+	if metadataChanged {
+		updatedService.ObjectMeta.Labels = updatedLabels
+		updatedService.ObjectMeta.Annotations = updatedAnnotations
+	}
 
 	// Define Fields To Ignore When Comparing
 	ignoreFields := []cmp.Option{
 		// Ignore the fields in a Spec struct which are not set directly by the distributed channel reconcilers
-		cmpopts.IgnoreFields(oldService.Spec, "ClusterIP", "Type", "SessionAffinity"),
+		cmpopts.IgnoreFields(oldService.Spec, "ClusterIP", "ClusterIPs", "Type", "SessionAffinity"),
 		// Ignore some other fields buried inside otherwise-relevant ones, mainly "defaults that come from empty strings,"
 		// as there is no reason to restart the deployments for those changes.
 		cmpopts.IgnoreFields(corev1.ServicePort{}, "Protocol"), // "" -> "TCP"
@@ -210,23 +234,18 @@ func CheckServiceChanged(logger *zap.Logger, oldService, newService *corev1.Serv
 
 	// Verify everything in the service spec aside from some particular exceptions (see "ignoreFields" above)
 	specEqual := cmp.Equal(oldService.Spec, newService.Spec, ignoreFields...)
+	if !specEqual {
+		updatedService.Spec = newService.Spec
+	}
+
 	if specEqual && !metadataChanged {
 		// Nothing of interest changed, so just keep the old service
 		return nil, false
 	}
 
-	// Create an updated service from the old one, but using the new Spec field
-	updatedService := oldService.DeepCopy()
-	if metadataChanged {
-		updatedService.ObjectMeta.Labels = updatedLabels
-		updatedService.ObjectMeta.Annotations = updatedAnnotations
-	}
-	if !specEqual {
-		updatedService.Spec = newService.Spec
-	}
-
 	// Some fields are immutable and need to be guaranteed identical before being used for patching purposes
 	updatedService.Spec.ClusterIP = oldService.Spec.ClusterIP
+	updatedService.Spec.ClusterIPs = []string{oldService.Spec.ClusterIP}
 
 	return createJsonPatch(logger, oldService, updatedService)
 }

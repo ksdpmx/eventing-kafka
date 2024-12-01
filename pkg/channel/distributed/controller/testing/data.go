@@ -83,6 +83,8 @@ const (
 	KafkaSecretDataValuePassword = "TestKafkaSecretDataPassword"
 	KafkaSecretDataValueSaslType = "PLAIN"
 
+	Tenant   = "default"
+	Replicas = 5
 	// NumPartitions - ChannelSpec Test Data
 	NumPartitions = 123
 	// ReplicationFactor - ChannelSpec Test Data
@@ -194,19 +196,43 @@ var (
 	RetentionMillisString = strconv.FormatInt(RetentionDuration.Milliseconds(), 10)
 	DeletionTimestamp     = metav1.Now()
 
-	DispatcherDeploymentAnnotations = map[string]string{"DDAKey1": "DDAValue1", "DDAKey2": "DDAValue2", "DDAKey3": "DDAValue3"}
-	DispatcherDeploymentLabels      = map[string]string{"DDLKey1": "DDLValue1", "DDLKey2": "DDLValue2", "DDLKey3": "DDLValue3"}
-	DispatcherPodAnnotations        = map[string]string{"DPAKey1": "DPAValue1", "DPAKey2": "DPAValue2", "DPAKey3": "DPAValue3"}
-	DispatcherPodLabels             = map[string]string{"DPLKey1": "DPLValue1", "DPLKey2": "DPLValue2", "DPLKey3": "DPLValue3"}
-	DispatcherServiceAnnotations    = map[string]string{"DSAKey1": "DSAValue1", "DSAKey2": "DSAValue2", "DSAKey3": "DSAValue3"}
-	DispatcherServiceLabels         = map[string]string{"DSLKey1": "DSLValue1", "DSLKey2": "DSLValue2", "DSLKey3": "DSLValue3"}
+	DispatcherDeploymentAnnotations = map[string]string{
+		"DDAKey1": "DDAValue1", "DDAKey2": "DDAValue2", "DDAKey3": "DDAValue3",
+	}
+	DispatcherDeploymentLabels = map[string]string{
+		"DDLKey1": "DDLValue1", "DDLKey2": "DDLValue2", "DDLKey3": "DDLValue3",
+	}
+	DispatcherPodAnnotations = map[string]string{
+		"DPAKey1": "DPAValue1", "DPAKey2": "DPAValue2", "DPAKey3": "DPAValue3",
+	}
+	DispatcherPodLabels = map[string]string{
+		"DPLKey1": "DPLValue1", "DPLKey2": "DPLValue2", "DPLKey3": "DPLValue3",
+	}
+	DispatcherServiceAnnotations = map[string]string{
+		"DSAKey1": "DSAValue1", "DSAKey2": "DSAValue2", "DSAKey3": "DSAValue3",
+	}
+	DispatcherServiceLabels = map[string]string{
+		"DSLKey1": "DSLValue1", "DSLKey2": "DSLValue2", "DSLKey3": "DSLValue3",
+	}
 
-	ReceiverDeploymentAnnotations = map[string]string{"RDAKey1": "RDAValue1", "RDAKey2": "RDAValue2", "RDAKey3": "RDAValue3"}
-	ReceiverDeploymentLabels      = map[string]string{"RDLKey1": "RDLValue1", "RDLKey2": "RDLValue2", "RDLKey3": "RDLValue3"}
-	ReceiverPodAnnotations        = map[string]string{"RPAKey1": "RPAValue1", "RPAKey2": "RPAValue2", "RPAKey3": "RPAValue3"}
-	ReceiverPodLabels             = map[string]string{"RPLKey1": "RPLValue1", "RPLKey2": "RPLValue2", "RPLKey3": "RPLValue3"}
-	ReceiverServiceAnnotations    = map[string]string{"RSAKey1": "RSAValue1", "RSAKey2": "RSAValue2", "RSAKey3": "RSAValue3"}
-	ReceiverServiceLabels         = map[string]string{"RSLKey1": "RSLValue1", "RSLKey2": "RSLValue2", "RSLKey3": "RSLValue3"}
+	ReceiverDeploymentAnnotations = map[string]string{
+		"RDAKey1": "RDAValue1", "RDAKey2": "RDAValue2", "RDAKey3": "RDAValue3",
+	}
+	ReceiverDeploymentLabels = map[string]string{
+		"RDLKey1": "RDLValue1", "RDLKey2": "RDLValue2", "RDLKey3": "RDLValue3",
+	}
+	ReceiverPodAnnotations = map[string]string{
+		"RPAKey1": "RPAValue1", "RPAKey2": "RPAValue2", "RPAKey3": "RPAValue3",
+	}
+	ReceiverPodLabels = map[string]string{
+		"RPLKey1": "RPLValue1", "RPLKey2": "RPLValue2", "RPLKey3": "RPLValue3",
+	}
+	ReceiverServiceAnnotations = map[string]string{
+		"RSAKey1": "RSAValue1", "RSAKey2": "RSAValue2", "RSAKey3": "RSAValue3",
+	}
+	ReceiverServiceLabels = map[string]string{
+		"RSLKey1": "RSLValue1", "RSLKey2": "RSLValue2", "RSLKey3": "RSLValue3",
+	}
 )
 
 //
@@ -566,6 +592,8 @@ func NewKafkaChannel(options ...KafkaChannelOption) *kafkav1beta1.KafkaChannel {
 			Name:      KafkaChannelName,
 		},
 		Spec: kafkav1beta1.KafkaChannelSpec{
+			Tenant:            Tenant,
+			Replicas:          Replicas,
 			NumPartitions:     NumPartitions,
 			ReplicationFactor: ReplicationFactor,
 			RetentionDuration: RetentionDurationISO8601,
@@ -629,15 +657,22 @@ func WithLabels(kafkachannel *kafkav1beta1.KafkaChannel) {
 
 // WithAddress Sets The KafkaChannel's Address
 func WithAddress(kafkachannel *kafkav1beta1.KafkaChannel) {
-	kafkachannel.Status.SetAddress(&apis.URL{
-		Scheme: "http",
-		Host:   fmt.Sprintf("%s-%s.%s.svc.cluster.local", KafkaChannelName, kafkaconstants.KafkaChannelServiceNameSuffix, KafkaChannelNamespace),
-	})
+	kafkachannel.Status.SetAddress(
+		&apis.URL{
+			Scheme: "http",
+			Host: fmt.Sprintf(
+				"%s-%s.%s.svc.cluster.local", KafkaChannelName, kafkaconstants.KafkaChannelServiceNameSuffix,
+				KafkaChannelNamespace,
+			),
+		},
+	)
 }
 
 // WithKafkaChannelConfigurationFailedNoSecret Sets The KafkaChannel's Configuration As Failed - No Secret
 func WithKafkaChannelConfigurationFailedNoSecret(kafkachannel *kafkav1beta1.KafkaChannel) {
-	kafkachannel.Status.GetConditionSet().Manage(&kafkachannel.Status).MarkFalse("ConfigurationReady", "KafkaSecretReconciled", "No Kafka Secret For KafkaChannel")
+	kafkachannel.Status.GetConditionSet().Manage(&kafkachannel.Status).MarkFalse(
+		"ConfigurationReady", "KafkaSecretReconciled", "No Kafka Secret For KafkaChannel",
+	)
 }
 
 // WithKafkaChannelServiceReady Sets The KafkaChannel's Service As READY
@@ -647,7 +682,10 @@ func WithKafkaChannelServiceReady(kafkachannel *kafkav1beta1.KafkaChannel) {
 
 // WithKafkaChannelServiceFailed Sets The KafkaChannel's Services As Failed
 func WithKafkaChannelServiceFailed(kafkachannel *kafkav1beta1.KafkaChannel) {
-	kafkachannel.Status.MarkChannelServiceFailed(event.KafkaChannelServiceReconciliationFailed.String(), "Failed To Create KafkaChannel Service: inducing failure for create services")
+	kafkachannel.Status.MarkChannelServiceFailed(
+		event.KafkaChannelServiceReconciliationFailed.String(),
+		"Failed To Create KafkaChannel Service: inducing failure for create services",
+	)
 }
 
 // WithReceiverServiceReady Sets The KafkaChannel's Receiver Service As READY ("ChannelServiceReady")
@@ -657,22 +695,34 @@ func WithReceiverServiceReady(kafkachannel *kafkav1beta1.KafkaChannel) {
 
 // WithReceiverServiceFailed Sets The KafkaChannel's Receiver Service As Failed
 func WithReceiverServiceFailed(kafkachannel *kafkav1beta1.KafkaChannel) {
-	distributedmessaging.MarkReceiverServiceFailed(&kafkachannel.Status, event.ReceiverServiceReconciliationFailed.String(), "Receiver Service Failed: inducing failure for create services")
+	distributedmessaging.MarkReceiverServiceFailed(
+		&kafkachannel.Status, event.ReceiverServiceReconciliationFailed.String(),
+		"Receiver Service Failed: inducing failure for create services",
+	)
 }
 
 // WithReceiverServiceFailedNoSecret Sets The KafkaChannel's Receiver Service As Failed ("no secret found")
 func WithReceiverServiceFailedNoSecret(kafkachannel *kafkav1beta1.KafkaChannel) {
-	distributedmessaging.MarkReceiverServiceFailed(&kafkachannel.Status, event.ReceiverServiceReconciliationFailed.String(), "Receiver Service Failed: no secret found")
+	distributedmessaging.MarkReceiverServiceFailed(
+		&kafkachannel.Status, event.ReceiverServiceReconciliationFailed.String(),
+		"Receiver Service Failed: no secret found",
+	)
 }
 
 // WithReceiverServiceFailedTimestamp Sets The KafkaChannel's Receiver Service As Failed ("encountered Receiver Service with DeletionTimestamp" ...)
 func WithReceiverServiceFailedTimestamp(kafkachannel *kafkav1beta1.KafkaChannel) {
-	distributedmessaging.MarkReceiverServiceFailed(&kafkachannel.Status, event.ReceiverServiceReconciliationFailed.String(), "Receiver Service Failed: encountered Receiver Service with DeletionTimestamp eventing-test-ns/kafkasecret-name-b9176d5f-receiver - potential race condition")
+	distributedmessaging.MarkReceiverServiceFailed(
+		&kafkachannel.Status, event.ReceiverServiceReconciliationFailed.String(),
+		"Receiver Service Failed: encountered Receiver Service with DeletionTimestamp eventing-test-ns/kafkasecret-name-b9176d5f-receiver - potential race condition",
+	)
 }
 
 // WithReceiverDeploymentFailedTimestamp Sets The KafkaChannel's Receiver Deployment As Failed ("encountered Receiver Deployment with DeletionTimestamp" ...)
 func WithReceiverDeploymentFailedTimestamp(kafkachannel *kafkav1beta1.KafkaChannel) {
-	distributedmessaging.MarkReceiverDeploymentFailed(&kafkachannel.Status, event.ReceiverDeploymentReconciliationFailed.String(), "Receiver Deployment Failed: encountered Receiver Deployment with DeletionTimestamp eventing-test-ns/kafkasecret-name-b9176d5f-receiver - potential race condition")
+	distributedmessaging.MarkReceiverDeploymentFailed(
+		&kafkachannel.Status, event.ReceiverDeploymentReconciliationFailed.String(),
+		"Receiver Deployment Failed: encountered Receiver Deployment with DeletionTimestamp eventing-test-ns/kafkasecret-name-b9176d5f-receiver - potential race condition",
+	)
 }
 
 // WithReceiverDeploymentReady Sets The KafkaChannel's Receiver Deployment As READY  ("EndpointsReady")
@@ -682,12 +732,18 @@ func WithReceiverDeploymentReady(kafkachannel *kafkav1beta1.KafkaChannel) {
 
 // WithReceiverDeploymentFailed Sets The KafkaChannel's Receiver Deployment As Failed
 func WithReceiverDeploymentFailed(kafkachannel *kafkav1beta1.KafkaChannel) {
-	distributedmessaging.MarkReceiverDeploymentFailed(&kafkachannel.Status, event.ReceiverDeploymentReconciliationFailed.String(), "Receiver Deployment Failed: inducing failure for create deployments")
+	distributedmessaging.MarkReceiverDeploymentFailed(
+		&kafkachannel.Status, event.ReceiverDeploymentReconciliationFailed.String(),
+		"Receiver Deployment Failed: inducing failure for create deployments",
+	)
 }
 
 // WithReceiverDeploymentFailedNoSecret Sets The KafkaChannel's Receiver Deployment As Failed ("no secret found")
 func WithReceiverDeploymentFailedNoSecret(kafkachannel *kafkav1beta1.KafkaChannel) {
-	distributedmessaging.MarkReceiverDeploymentFailed(&kafkachannel.Status, event.ReceiverDeploymentReconciliationFailed.String(), "Receiver Deployment Failed: no secret found")
+	distributedmessaging.MarkReceiverDeploymentFailed(
+		&kafkachannel.Status, event.ReceiverDeploymentReconciliationFailed.String(),
+		"Receiver Deployment Failed: no secret found",
+	)
 }
 
 // WithDispatcherDeploymentReady Sets The KafkaChannel's Dispatcher Deployment As READY
@@ -699,17 +755,26 @@ func WithDispatcherDeploymentReady(_ *kafkav1beta1.KafkaChannel) {
 
 // WithDispatcherDeploymentFailed Sets The KafkaChannel's Dispatcher Deployment As Failed
 func WithDispatcherDeploymentFailed(kafkachannel *kafkav1beta1.KafkaChannel) {
-	distributedmessaging.MarkDispatcherDeploymentFailed(&kafkachannel.Status, event.DispatcherDeploymentReconciliationFailed.String(), "Failed To Create Dispatcher Deployment: inducing failure for create deployments")
+	distributedmessaging.MarkDispatcherDeploymentFailed(
+		&kafkachannel.Status, event.DispatcherDeploymentReconciliationFailed.String(),
+		"Failed To Create Dispatcher Deployment: inducing failure for create deployments",
+	)
 }
 
 // WithDispatcherUpdateFailed Sets The KafkaChannel's Dispatcher Update As Failed
 func WithDispatcherUpdateFailed(kafkachannel *kafkav1beta1.KafkaChannel) {
-	distributedmessaging.MarkDispatcherDeploymentFailed(&kafkachannel.Status, event.DispatcherDeploymentUpdateFailed.String(), "Failed To Update Dispatcher Deployment: inducing failure for update deployments")
+	distributedmessaging.MarkDispatcherDeploymentFailed(
+		&kafkachannel.Status, event.DispatcherDeploymentUpdateFailed.String(),
+		"Failed To Update Dispatcher Deployment: inducing failure for update deployments",
+	)
 }
 
 // WithDispatcherServicePatchFailed Sets The KafkaChannel's Dispatcher Patch As Failed
 func WithDispatcherServicePatchFailed(kafkachannel *kafkav1beta1.KafkaChannel) {
-	distributedmessaging.MarkDispatcherServiceFailed(&kafkachannel.Status, event.DispatcherServicePatchFailed.String(), "Failed To Patch Dispatcher Service: inducing failure for patch services")
+	distributedmessaging.MarkDispatcherServiceFailed(
+		&kafkachannel.Status, event.DispatcherServicePatchFailed.String(),
+		"Failed To Patch Dispatcher Service: inducing failure for patch services",
+	)
 }
 
 func WithDispatcherServiceReady(kafkachannel *kafkav1beta1.KafkaChannel) {
@@ -717,7 +782,10 @@ func WithDispatcherServiceReady(kafkachannel *kafkav1beta1.KafkaChannel) {
 }
 
 func WithDispatcherServiceFailed(kafkachannel *kafkav1beta1.KafkaChannel) {
-	distributedmessaging.MarkDispatcherServiceFailed(&kafkachannel.Status, event.DispatcherServiceReconciliationFailed.String(), "Failed To Create Dispatcher Service: inducing failure for create services")
+	distributedmessaging.MarkDispatcherServiceFailed(
+		&kafkachannel.Status, event.DispatcherServiceReconciliationFailed.String(),
+		"Failed To Create Dispatcher Service: inducing failure for create services",
+	)
 }
 
 // WithTopicReady Sets The KafkaChannel's Topic READY
@@ -974,10 +1042,16 @@ func NewKafkaChannelReceiverDeployment(options ...DeploymentOption) *appsv1.Depl
 	}
 
 	// Append Test Config Annotations & Labels
-	deployment.ObjectMeta.Annotations = commonconfig.JoinStringMaps(deployment.ObjectMeta.Annotations, ReceiverDeploymentAnnotations)
+	deployment.ObjectMeta.Annotations = commonconfig.JoinStringMaps(
+		deployment.ObjectMeta.Annotations, ReceiverDeploymentAnnotations,
+	)
 	deployment.ObjectMeta.Labels = commonconfig.JoinStringMaps(deployment.ObjectMeta.Labels, ReceiverDeploymentLabels)
-	deployment.Spec.Template.ObjectMeta.Annotations = commonconfig.JoinStringMaps(deployment.Spec.Template.ObjectMeta.Annotations, ReceiverPodAnnotations)
-	deployment.Spec.Template.ObjectMeta.Labels = commonconfig.JoinStringMaps(deployment.Spec.Template.ObjectMeta.Labels, ReceiverPodLabels)
+	deployment.Spec.Template.ObjectMeta.Annotations = commonconfig.JoinStringMaps(
+		deployment.Spec.Template.ObjectMeta.Annotations, ReceiverPodAnnotations,
+	)
+	deployment.Spec.Template.ObjectMeta.Labels = commonconfig.JoinStringMaps(
+		deployment.Spec.Template.ObjectMeta.Labels, ReceiverPodLabels,
+	)
 
 	// Apply The Specified Deployment Customizations
 	for _, option := range options {
@@ -992,9 +1066,11 @@ func NewKafkaChannelReceiverDeployment(options ...DeploymentOption) *appsv1.Depl
 func NewKafkaChannelDispatcherService(options ...ServiceOption) *corev1.Service {
 
 	// Get The Expected Service Name For The Test KafkaChannel
-	serviceName := util.DispatcherDnsSafeName(&kafkav1beta1.KafkaChannel{
-		ObjectMeta: metav1.ObjectMeta{Namespace: KafkaChannelNamespace, Name: KafkaChannelName},
-	})
+	serviceName := util.DispatcherDnsSafeName(
+		&kafkav1beta1.KafkaChannel{
+			ObjectMeta: metav1.ObjectMeta{Namespace: KafkaChannelNamespace, Name: KafkaChannelName},
+		},
+	)
 
 	// Create The Dispatcher Service
 	service := &corev1.Service{
@@ -1044,7 +1120,11 @@ func NewKafkaChannelDispatcherService(options ...ServiceOption) *corev1.Service 
 func NewKafkaChannelDispatcherDeployment(options ...DeploymentOption) *appsv1.Deployment {
 
 	// Get The Expected Dispatcher & Topic Names For The Test KafkaChannel
-	sparseKafkaChannel := &kafkav1beta1.KafkaChannel{ObjectMeta: metav1.ObjectMeta{Namespace: KafkaChannelNamespace, Name: KafkaChannelName}}
+	sparseKafkaChannel := &kafkav1beta1.KafkaChannel{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: KafkaChannelNamespace, Name: KafkaChannelName,
+		},
+	}
 	dispatcherName := util.DispatcherDnsSafeName(sparseKafkaChannel)
 	topicName := util.TopicName(sparseKafkaChannel)
 	systemNamespace := system.Namespace()
@@ -1214,10 +1294,16 @@ func NewKafkaChannelDispatcherDeployment(options ...DeploymentOption) *appsv1.De
 	}
 
 	// Append Test Config Annotations & Labels
-	deployment.ObjectMeta.Annotations = commonconfig.JoinStringMaps(deployment.ObjectMeta.Annotations, DispatcherDeploymentAnnotations)
+	deployment.ObjectMeta.Annotations = commonconfig.JoinStringMaps(
+		deployment.ObjectMeta.Annotations, DispatcherDeploymentAnnotations,
+	)
 	deployment.ObjectMeta.Labels = commonconfig.JoinStringMaps(deployment.ObjectMeta.Labels, DispatcherDeploymentLabels)
-	deployment.Spec.Template.ObjectMeta.Annotations = commonconfig.JoinStringMaps(deployment.Spec.Template.ObjectMeta.Annotations, DispatcherPodAnnotations)
-	deployment.Spec.Template.ObjectMeta.Labels = commonconfig.JoinStringMaps(deployment.Spec.Template.ObjectMeta.Labels, DispatcherPodLabels)
+	deployment.Spec.Template.ObjectMeta.Annotations = commonconfig.JoinStringMaps(
+		deployment.Spec.Template.ObjectMeta.Annotations, DispatcherPodAnnotations,
+	)
+	deployment.Spec.Template.ObjectMeta.Labels = commonconfig.JoinStringMaps(
+		deployment.Spec.Template.ObjectMeta.Labels, DispatcherPodLabels,
+	)
 
 	// Apply The Specified Deployment Customizations
 	for _, option := range options {
@@ -1246,9 +1332,12 @@ func NewChannelOwnerRef() metav1.OwnerReference {
 func NewKafkaChannelLabelUpdate(kafkachannel *kafkav1beta1.KafkaChannel) clientgotesting.UpdateActionImpl {
 	return clientgotesting.UpdateActionImpl{
 		ActionImpl: clientgotesting.ActionImpl{
-			Namespace:   "KafkaChannelNamespace",
-			Verb:        "update",
-			Resource:    schema.GroupVersionResource{Group: kafkav1beta1.SchemeGroupVersion.Group, Version: kafkav1beta1.SchemeGroupVersion.Version, Resource: "kafkachannels"},
+			Namespace: "KafkaChannelNamespace",
+			Verb:      "update",
+			Resource: schema.GroupVersionResource{
+				Group: kafkav1beta1.SchemeGroupVersion.Group, Version: kafkav1beta1.SchemeGroupVersion.Version,
+				Resource: "kafkachannels",
+			},
 			Subresource: "",
 		},
 		Object: kafkachannel,
@@ -1259,9 +1348,12 @@ func NewKafkaChannelLabelUpdate(kafkachannel *kafkav1beta1.KafkaChannel) clientg
 func NewFinalizerPatchActionImpl() clientgotesting.PatchActionImpl {
 	return clientgotesting.PatchActionImpl{
 		ActionImpl: clientgotesting.ActionImpl{
-			Namespace:   KafkaChannelNamespace,
-			Verb:        "patch",
-			Resource:    schema.GroupVersionResource{Group: kafkav1beta1.SchemeGroupVersion.Group, Version: kafkav1beta1.SchemeGroupVersion.Version, Resource: "kafkachannels"},
+			Namespace: KafkaChannelNamespace,
+			Verb:      "patch",
+			Resource: schema.GroupVersionResource{
+				Group: kafkav1beta1.SchemeGroupVersion.Group, Version: kafkav1beta1.SchemeGroupVersion.Version,
+				Resource: "kafkachannels",
+			},
 			Subresource: "",
 		},
 		Name:      KafkaChannelName,
@@ -1273,27 +1365,38 @@ func NewFinalizerPatchActionImpl() clientgotesting.PatchActionImpl {
 
 // NewKafkaChannelDispatcherDeploymentUpdatedEvent Creates A Dispatcher Deployment Updated Event
 func NewKafkaChannelDispatcherDeploymentUpdatedEvent() string {
-	return reconcilertesting.Eventf(corev1.EventTypeNormal, event.DispatcherDeploymentUpdated.String(), "Dispatcher Deployment Updated")
+	return reconcilertesting.Eventf(
+		corev1.EventTypeNormal, event.DispatcherDeploymentUpdated.String(), "Dispatcher Deployment Updated",
+	)
 }
 
 // NewKafkaChannelDispatcherDeploymentUpdateFailedEvent Creates A Dispatcher Deployment Update Failure Event
 func NewKafkaChannelDispatcherDeploymentUpdateFailedEvent() string {
-	return reconcilertesting.Eventf(corev1.EventTypeWarning, event.DispatcherDeploymentUpdateFailed.String(), "Dispatcher Deployment Update Failed")
+	return reconcilertesting.Eventf(
+		corev1.EventTypeWarning, event.DispatcherDeploymentUpdateFailed.String(), "Dispatcher Deployment Update Failed",
+	)
 }
 
 // NewKafkaChannelDispatcherServicePatchedEvent Creates A Dispatcher Service Patched Event
 func NewKafkaChannelDispatcherServicePatchedEvent() string {
-	return reconcilertesting.Eventf(corev1.EventTypeNormal, event.DispatcherServicePatched.String(), "Dispatcher Service Patched")
+	return reconcilertesting.Eventf(
+		corev1.EventTypeNormal, event.DispatcherServicePatched.String(), "Dispatcher Service Patched",
+	)
 }
 
 // NewKafkaChannelDispatcherServicePatchFailedEvent Creates A Dispatcher Service Patch Failure Event
 func NewKafkaChannelDispatcherServicePatchFailedEvent() string {
-	return reconcilertesting.Eventf(corev1.EventTypeWarning, event.DispatcherServicePatchFailed.String(), "Dispatcher Service Patch Failed")
+	return reconcilertesting.Eventf(
+		corev1.EventTypeWarning, event.DispatcherServicePatchFailed.String(), "Dispatcher Service Patch Failed",
+	)
 }
 
 // NewKafkaChannelSuccessfulReconciliationEvent Creates A Successful KafkaChannel Reconciled Event
 func NewKafkaChannelSuccessfulReconciliationEvent() string {
-	return reconcilertesting.Eventf(corev1.EventTypeNormal, event.KafkaChannelReconciled.String(), `KafkaChannel Reconciled Successfully: "%s/%s"`, KafkaChannelNamespace, KafkaChannelName)
+	return reconcilertesting.Eventf(
+		corev1.EventTypeNormal, event.KafkaChannelReconciled.String(), `KafkaChannel Reconciled Successfully: "%s/%s"`,
+		KafkaChannelNamespace, KafkaChannelName,
+	)
 }
 
 // NewKafkaChannelFailedReconciliationEvent Creates A Failed KafkaChannel Reconciled Event
@@ -1308,21 +1411,29 @@ func NewKafkaChannelFailedFinalizationEvent() string {
 
 // NewKafkaChannelFinalizerUpdateEvent Creates A Successful KafkaChannel Finalizer Update Event
 func NewKafkaChannelFinalizerUpdateEvent() string {
-	return reconcilertesting.Eventf(corev1.EventTypeNormal, "FinalizerUpdate", `Updated "%s" finalizers`, KafkaChannelName)
+	return reconcilertesting.Eventf(
+		corev1.EventTypeNormal, "FinalizerUpdate", `Updated "%s" finalizers`, KafkaChannelName,
+	)
 }
 
 // NewKafkaChannelSuccessfulFinalizedEvent Creates A Successful KafkaChannel Finalizer Update Event
 func NewKafkaChannelSuccessfulFinalizedEvent() string {
-	return reconcilertesting.Eventf(corev1.EventTypeNormal, event.KafkaChannelFinalized.String(), fmt.Sprintf("KafkaChannel Finalized Successfully: \"%s/%s\"", KafkaChannelNamespace, KafkaChannelName))
+	return reconcilertesting.Eventf(
+		corev1.EventTypeNormal, event.KafkaChannelFinalized.String(),
+		fmt.Sprintf("KafkaChannel Finalized Successfully: \"%s/%s\"", KafkaChannelNamespace, KafkaChannelName),
+	)
 }
 
 // NewServiceUpdateActionImpl Creates A UpdateActionImpl For A Service Update Command
 func NewServiceUpdateActionImpl(service *corev1.Service) clientgotesting.UpdateActionImpl {
 	return clientgotesting.UpdateActionImpl{
 		ActionImpl: clientgotesting.ActionImpl{
-			Namespace:   service.Namespace,
-			Verb:        "update",
-			Resource:    schema.GroupVersionResource{Group: corev1.SchemeGroupVersion.Group, Version: corev1.SchemeGroupVersion.Version, Resource: "services"},
+			Namespace: service.Namespace,
+			Verb:      "update",
+			Resource: schema.GroupVersionResource{
+				Group: corev1.SchemeGroupVersion.Group, Version: corev1.SchemeGroupVersion.Version,
+				Resource: "services",
+			},
 			Subresource: "",
 		},
 		Object: service,
@@ -1333,9 +1444,12 @@ func NewServiceUpdateActionImpl(service *corev1.Service) clientgotesting.UpdateA
 func NewDeploymentUpdateActionImpl(deployment *appsv1.Deployment) clientgotesting.UpdateActionImpl {
 	return clientgotesting.UpdateActionImpl{
 		ActionImpl: clientgotesting.ActionImpl{
-			Namespace:   deployment.Namespace,
-			Verb:        "update",
-			Resource:    schema.GroupVersionResource{Group: appsv1.SchemeGroupVersion.Group, Version: appsv1.SchemeGroupVersion.Version, Resource: "deployments"},
+			Namespace: deployment.Namespace,
+			Verb:      "update",
+			Resource: schema.GroupVersionResource{
+				Group: appsv1.SchemeGroupVersion.Group, Version: appsv1.SchemeGroupVersion.Version,
+				Resource: "deployments",
+			},
 			Subresource: "",
 		},
 		Object: deployment,
@@ -1346,9 +1460,12 @@ func NewDeploymentUpdateActionImpl(deployment *appsv1.Deployment) clientgotestin
 func NewServiceDeleteActionImpl(service *corev1.Service) clientgotesting.DeleteActionImpl {
 	return clientgotesting.DeleteActionImpl{
 		ActionImpl: clientgotesting.ActionImpl{
-			Namespace:   service.Namespace,
-			Verb:        "delete",
-			Resource:    schema.GroupVersionResource{Group: corev1.SchemeGroupVersion.Group, Version: corev1.SchemeGroupVersion.Version, Resource: "services"},
+			Namespace: service.Namespace,
+			Verb:      "delete",
+			Resource: schema.GroupVersionResource{
+				Group: corev1.SchemeGroupVersion.Group, Version: corev1.SchemeGroupVersion.Version,
+				Resource: "services",
+			},
 			Subresource: "",
 		},
 		Name: service.Name,
@@ -1359,9 +1476,12 @@ func NewServiceDeleteActionImpl(service *corev1.Service) clientgotesting.DeleteA
 func NewDeploymentDeleteActionImpl(deployment *appsv1.Deployment) clientgotesting.DeleteActionImpl {
 	return clientgotesting.DeleteActionImpl{
 		ActionImpl: clientgotesting.ActionImpl{
-			Namespace:   deployment.Namespace,
-			Verb:        "delete",
-			Resource:    schema.GroupVersionResource{Group: appsv1.SchemeGroupVersion.Group, Version: appsv1.SchemeGroupVersion.Version, Resource: "deployments"},
+			Namespace: deployment.Namespace,
+			Verb:      "delete",
+			Resource: schema.GroupVersionResource{
+				Group: appsv1.SchemeGroupVersion.Group, Version: appsv1.SchemeGroupVersion.Version,
+				Resource: "deployments",
+			},
 			Subresource: "",
 		},
 		Name: deployment.Name,

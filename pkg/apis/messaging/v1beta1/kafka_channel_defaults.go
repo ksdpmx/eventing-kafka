@@ -18,6 +18,7 @@ package v1beta1
 
 import (
 	"context"
+	corev1 "k8s.io/api/core/v1"
 
 	"knative.dev/eventing/pkg/apis/messaging"
 	"knative.dev/pkg/apis"
@@ -44,10 +45,22 @@ func (kc *KafkaChannel) SetDefaults(ctx context.Context) {
 }
 
 func (kcs *KafkaChannelSpec) SetDefaults(ctx context.Context) {
-	if kcs.NumPartitions == 0 {
+	if len(kcs.Tenant) == 0 {
+		kcs.Tenant = constants.DefaultTenant
+	}
+	if kcs.Replicas < 0 {
+		kcs.Replicas = constants.DefaultReplicas
+	}
+	if kcs.NodeSelector == nil {
+		kcs.NodeSelector = make(map[string]string)
+	}
+	if kcs.Affinity == nil {
+		kcs.Affinity = &corev1.Affinity{}
+	}
+	if kcs.NumPartitions <= 0 {
 		kcs.NumPartitions = constants.DefaultNumPartitions
 	}
-	if kcs.ReplicationFactor == 0 {
+	if kcs.ReplicationFactor <= 0 {
 		kcs.ReplicationFactor = constants.DefaultReplicationFactor
 	}
 	if len(kcs.RetentionDuration) <= 0 {

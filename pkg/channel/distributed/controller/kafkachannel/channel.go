@@ -44,7 +44,10 @@ func (r *Reconciler) reconcileChannel(ctx context.Context, channel *kafkav1beta1
 	// Reconcile The KafkaChannel's Service
 	err := r.reconcileKafkaChannelService(ctx, logger, channel)
 	if err != nil {
-		controller.GetEventRecorder(ctx).Eventf(channel, corev1.EventTypeWarning, event.KafkaChannelServiceReconciliationFailed.String(), "Failed To Reconcile KafkaChannel Service: %v", err)
+		controller.GetEventRecorder(ctx).Eventf(
+			channel, corev1.EventTypeWarning, event.KafkaChannelServiceReconciliationFailed.String(),
+			"Failed To Reconcile KafkaChannel Service: %v", err,
+		)
 		logger.Error("Failed To Reconcile KafkaChannel Service", zap.Error(err))
 		return fmt.Errorf("failed to reconcile channel resources")
 	} else {
@@ -62,7 +65,9 @@ func (r *Reconciler) reconcileChannel(ctx context.Context, channel *kafkav1beta1
 //
 
 // Reconcile The KafkaChannel Service
-func (r *Reconciler) reconcileKafkaChannelService(ctx context.Context, logger *zap.Logger, channel *kafkav1beta1.KafkaChannel) error {
+func (r *Reconciler) reconcileKafkaChannelService(
+	ctx context.Context, logger *zap.Logger, channel *kafkav1beta1.KafkaChannel,
+) error {
 
 	// Attempt To Get The Service Associated With The Specified Channel
 	service, err := r.getKafkaChannelService(channel)
@@ -72,10 +77,15 @@ func (r *Reconciler) reconcileKafkaChannelService(ctx context.Context, logger *z
 		if errors.IsNotFound(err) {
 			logger.Info("KafkaChannel Service Not Found - Creating New One")
 			service = r.newKafkaChannelService(channel)
-			service, err = r.kubeClientset.CoreV1().Services(service.Namespace).Create(ctx, service, metav1.CreateOptions{})
+			service, err = r.kubeClientset.CoreV1().Services(service.Namespace).Create(
+				ctx, service, metav1.CreateOptions{},
+			)
 			if err != nil {
 				logger.Error("Failed To Create KafkaChannel Service", zap.Error(err))
-				channel.Status.MarkChannelServiceFailed(event.KafkaChannelServiceReconciliationFailed.String(), "Failed To Create KafkaChannel Service: %v", err)
+				channel.Status.MarkChannelServiceFailed(
+					event.KafkaChannelServiceReconciliationFailed.String(), "Failed To Create KafkaChannel Service: %v",
+					err,
+				)
 				return err
 			} else {
 				logger.Info("Successfully Created KafkaChannel Service")
@@ -83,7 +93,9 @@ func (r *Reconciler) reconcileKafkaChannelService(ctx context.Context, logger *z
 			}
 		} else {
 			logger.Error("Failed To Get KafkaChannel Service", zap.Error(err))
-			channel.Status.MarkChannelServiceFailed(event.KafkaChannelServiceReconciliationFailed.String(), "Failed To Get KafkaChannel Service: %v", err)
+			channel.Status.MarkChannelServiceFailed(
+				event.KafkaChannelServiceReconciliationFailed.String(), "Failed To Get KafkaChannel Service: %v", err,
+			)
 			return err
 		}
 	} else {
@@ -93,17 +105,48 @@ func (r *Reconciler) reconcileKafkaChannelService(ctx context.Context, logger *z
 			logger.Info("Successfully Verified KafkaChannel Service")
 			// Continue To Update Channel Status
 		} else {
-			logger.Warn("Encountered KafkaChannel Service With DeletionTimestamp - Forcing Reconciliation", zap.String("Namespace", service.Namespace), zap.String("Name", service.Name))
-			return fmt.Errorf("encountered KafkaChannel Service with DeletionTimestamp %s/%s - potential race condition", service.Namespace, service.Name)
+			logger.Warn(
+				"Encountered KafkaChannel Service With DeletionTimestamp - Forcing Reconciliation",
+				zap.String("Namespace", service.Namespace), zap.String("Name", service.Name),
+			)
+			return fmt.Errorf(
+				"encountered KafkaChannel Service with DeletionTimestamp %s/%s - potential race condition",
+				service.Namespace, service.Name,
+			)
 		}
+	}
+
+	// check if there's any drift between wiri and wisb
+	// reconcile spec.externalName only for now
+	receiverSvc, err := r.getReceiverService(channel.Spec.Tenant)
+	if err != nil {
+		logger.Error("Failed to get receiver service", zap.Error(err))
+		return err
+	}
+	receiverFQDN := receiverSvc.Name + "." + r.environment.SystemNamespace + ".svc.cluster.local"
+	if service.Spec.ExternalName != receiverFQDN {
+		logger.Warn("Reconciling KafkaChannel Service ExternalName", zap.String("Service", service.Name))
+		service.Spec.ExternalName = receiverFQDN
+		service, err = r.kubeClientset.CoreV1().Services(service.Namespace).Update(ctx, service, metav1.UpdateOptions{})
+		if err != nil {
+			logger.Error("Failed to update KafkaChannel Service", zap.Error(err))
+			channel.Status.MarkChannelServiceFailed(
+				event.KafkaChannelServiceReconciliationFailed.String(), "Failed to update KafkaChannel Service: %v",
+				err,
+			)
+			return err
+		}
+		logger.Info("Successfully Reconciled KafkaChannel Service ExternalName", zap.String("Service", service.Name))
 	}
 
 	// Update Channel Status
 	channel.Status.MarkChannelServiceTrue()
-	channel.Status.SetAddress(&apis.URL{
-		Scheme: "http",
-		Host:   network.GetServiceHostname(service.Name, service.Namespace),
-	})
+	channel.Status.SetAddress(
+		&apis.URL{
+			Scheme: "http",
+			Host:   network.GetServiceHostname(service.Name, service.Namespace),
+		},
+	)
 
 	// Return Success
 	return nil
@@ -124,12 +167,13 @@ func (r *Reconciler) getKafkaChannelService(channel *kafkav1beta1.KafkaChannel) 
 
 // Create KafkaChannel Service Model For The Specified Channel
 func (r *Reconciler) newKafkaChannelService(channel *kafkav1beta1.KafkaChannel) *corev1.Service {
+	tenant := channel.Spec.Tenant
 
 	// Get The KafkaChannel Service Name
 	serviceName := kafkautil.AppendKafkaChannelServiceNameSuffix(channel.Name)
 
 	// Get The Receiver Service Name For The Kafka Secret (Only One Receiver Service)
-	deploymentName := util.ReceiverDnsSafeName(r.config.Kafka.AuthSecretName)
+	deploymentName := util.ReceiverDnsSafeName(r.configs[tenant].Kafka.AuthSecretName, tenant)
 	serviceAddress := network.GetServiceHostname(deploymentName, r.environment.SystemNamespace)
 
 	// Create & Return The Service Model

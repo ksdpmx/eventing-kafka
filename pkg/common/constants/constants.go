@@ -19,6 +19,8 @@ package constants
 import "time"
 
 const (
+	DefaultTenant   = "default"
+	DefaultReplicas = 5
 
 	// DefaultNumPartitions is the KafkaChannel Spec default for the number of partitions
 	DefaultNumPartitions = 1

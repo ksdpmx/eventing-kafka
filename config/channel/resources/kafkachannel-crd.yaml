@@ -38,6 +38,22 @@ spec:
               description: Spec defines the desired state of the Channel.
               type: object
               properties:
+                tenant:
+                  description: Tenant is the tenant of the KafkaChannel to specify different Kafka clusters. By default, it is set to default.
+                  type: string
+                  default: default
+                replicas:
+                  description: Replicas is the number of KafkaChannel replicas. By default, it is set to 1.
+                  type: integer
+                  default: 5
+                nodeSelector:
+                  description: NodeSelector is the node selector for the KafkaChannel.
+                  type: object
+                  additionalProperties:
+                    type: string
+                affinity:
+                  description: Affinity is the affinity for the KafkaChannel.
+                  type: object
                 numPartitions:
                   description: NumPartitions is the number of partitions of a Kafka topic. By default, it is set to 1.
                   type: integer

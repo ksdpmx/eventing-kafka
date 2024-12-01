@@ -18,7 +18,6 @@ package util
 
 import (
 	"fmt"
-
 	"go.uber.org/zap"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -59,20 +58,23 @@ func NewChannelOwnerReference(channel *kafkav1beta1.KafkaChannel) metav1.OwnerRe
 	}
 }
 
-//
 // ReceiverDnsSafeName Creates A DNS Safe Name For The Receiver Deployment Using The Specified Kafka Secret
 //
 // Note - The current implementation creates a single Receiver Deployment for each
-//        Kafka Authentication (K8S Secrets) instance.
 //
-func ReceiverDnsSafeName(kafkaSecretName string) string {
+//	Kafka Authentication (K8S Secrets) instance.
+func ReceiverDnsSafeName(kafkaSecretName, tenant string) string {
 
 	// In order for the resulting name to be a valid DNS component it's length must be no more than 63 characters.
 	// We are consuming 18 chars for the component separators, hash, and Receiver suffix, which reduces the
-	// available length to 45. We will allocate 40 characters to the kafka secret name leaving an extra buffer.
-	safeSecretName := GenerateValidDnsName(kafkaSecretName, 40, true, false)
+	// available length to 45. We will allocate 32 characters to the kafka secret name leaving an extra buffer for tenant.
+	safeSecretName := GenerateValidDnsName(kafkaSecretName, 32, true, false)
 
-	return fmt.Sprintf("%s-%s-receiver", safeSecretName, GenerateHash(kafkaSecretName, 8))
+	name := fmt.Sprintf("%s-%s-%s-receiver", safeSecretName, tenant, GenerateHash(kafkaSecretName, 8))
+	if len(name) > 63 {
+		name = name[:63]
+	}
+	return name
 }
 
 // ChannelHostName Creates A Name For The Channel Host

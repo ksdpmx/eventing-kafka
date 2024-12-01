@@ -61,11 +61,17 @@ func TestNewController(t *testing.T) {
 	ctx, fakeInformers := injection.Fake.SetupInformers(ctx, &rest.Config{})
 	assert.NotNil(t, fakeInformers)
 
+	configMap := commontesting.GetTestSaramaConfigMapWithTenant(
+		commonconstants.CurrentConfigVersion, controllertesting.SaramaConfigYaml,
+		controllertesting.ControllerConfigYaml,
+	)
+
 	// Add The Fake K8S Clientset To The Context (Populated With ConfigMap)
-	configMap := commontesting.GetTestSaramaConfigMap(
-		commonconstants.CurrentConfigVersion,
-		controllertesting.SaramaConfigYaml,
-		controllertesting.ControllerConfigYaml)
+	//configMap := commontesting.GetTestSaramaConfigMap(
+	//	commonconstants.CurrentConfigVersion,
+	//	controllertesting.SaramaConfigYaml,
+	//	controllertesting.ControllerConfigYaml,
+	//)
 	secret := controllertesting.NewKafkaSecret(controllertesting.WithKafkaSecretFinalizer)
 	ctx, fakeClientset := fake.With(ctx, configMap, secret)
 	assert.NotNil(t, fakeClientset)
@@ -119,54 +125,62 @@ func TestFilterKafkaChannelOwnerByReferenceOrLabel(t *testing.T) {
 	testCases := []TestCase{
 		{
 			name: "Valid OwnerReference",
-			object: createMetaV1Object(metav1.ObjectMeta{
-				Name:      objName,
-				Namespace: objNamespace,
-				OwnerReferences: []metav1.OwnerReference{
-					{
-						APIVersion: kafkaChannelGVK.GroupVersion().String(),
-						Kind:       kafkaChannelGVK.Kind,
-						Name:       kafkaChannelName,
-						Controller: &trueBool,
+			object: createMetaV1Object(
+				metav1.ObjectMeta{
+					Name:      objName,
+					Namespace: objNamespace,
+					OwnerReferences: []metav1.OwnerReference{
+						{
+							APIVersion: kafkaChannelGVK.GroupVersion().String(),
+							Kind:       kafkaChannelGVK.Kind,
+							Name:       kafkaChannelName,
+							Controller: &trueBool,
+						},
 					},
 				},
-			}),
+			),
 			expectedResult: true,
 		},
 		{
 			name: "Invalid OwnerReference",
-			object: createMetaV1Object(metav1.ObjectMeta{
-				Name:      objName,
-				Namespace: objNamespace,
-				OwnerReferences: []metav1.OwnerReference{
-					{
-						APIVersion: serviceGVK.GroupVersion().String(),
-						Kind:       serviceGVK.Kind,
-						Name:       serviceName,
-						Controller: &trueBool,
+			object: createMetaV1Object(
+				metav1.ObjectMeta{
+					Name:      objName,
+					Namespace: objNamespace,
+					OwnerReferences: []metav1.OwnerReference{
+						{
+							APIVersion: serviceGVK.GroupVersion().String(),
+							Kind:       serviceGVK.Kind,
+							Name:       serviceName,
+							Controller: &trueBool,
+						},
 					},
 				},
-			}),
+			),
 			expectedResult: false,
 		},
 		{
 			name: "Valid Labels",
-			object: createMetaV1Object(metav1.ObjectMeta{
-				Name:      objName,
-				Namespace: objNamespace,
-				Labels: map[string]string{
-					constants.KafkaChannelNameLabel:      kafkaChannelName,
-					constants.KafkaChannelNamespaceLabel: kafkaChannelNamespace,
+			object: createMetaV1Object(
+				metav1.ObjectMeta{
+					Name:      objName,
+					Namespace: objNamespace,
+					Labels: map[string]string{
+						constants.KafkaChannelNameLabel:      kafkaChannelName,
+						constants.KafkaChannelNamespaceLabel: kafkaChannelNamespace,
+					},
 				},
-			}),
+			),
 			expectedResult: true,
 		},
 		{
 			name: "No OwnerReference Or Labels",
-			object: createMetaV1Object(metav1.ObjectMeta{
-				Name:      objName,
-				Namespace: objNamespace,
-			}),
+			object: createMetaV1Object(
+				metav1.ObjectMeta{
+					Name:      objName,
+					Namespace: objNamespace,
+				},
+			),
 			expectedResult: false,
 		},
 		{
@@ -189,16 +203,18 @@ func TestFilterKafkaChannelOwnerByReferenceOrLabel(t *testing.T) {
 
 	// Execute The Individual Test Cases
 	for _, testCase := range filteredTestCases {
-		t.Run(testCase.name, func(t *testing.T) {
+		t.Run(
+			testCase.name, func(t *testing.T) {
 
-			// Get The Actual Filter Function
-			filterFunc := FilterKafkaChannelOwnerByReferenceOrLabel()
-			assert.NotNil(t, filterFunc)
+				// Get The Actual Filter Function
+				filterFunc := FilterKafkaChannelOwnerByReferenceOrLabel()
+				assert.NotNil(t, filterFunc)
 
-			// Perform The Test
-			actualResult := filterFunc(testCase.object)
-			assert.Equal(t, testCase.expectedResult, actualResult)
-		})
+				// Perform The Test
+				actualResult := filterFunc(testCase.object)
+				assert.Equal(t, testCase.expectedResult, actualResult)
+			},
+		)
 	}
 }
 
@@ -226,7 +242,12 @@ func populateEnvironmentVariables(t *testing.T) {
 	assert.Nil(t, os.Setenv(commonenv.MetricsPortEnvVarKey, strconv.Itoa(controllertesting.MetricsPort)))
 	assert.Nil(t, os.Setenv(controllerenv.DispatcherImageEnvVarKey, controllertesting.DispatcherImage))
 	assert.Nil(t, os.Setenv(controllerenv.ReceiverImageEnvVarKey, controllertesting.ReceiverImage))
-	assert.Nil(t, os.Setenv(commonenv.ResyncPeriodMinutesEnvVarKey, strconv.Itoa(int(controllertesting.ResyncPeriod/time.Minute))))
+	assert.Nil(
+		t,
+		os.Setenv(
+			commonenv.ResyncPeriodMinutesEnvVarKey, strconv.Itoa(int(controllertesting.ResyncPeriod/time.Minute)),
+		),
+	)
 }
 
 // Utility Function For Creating A K8S Service With Specified ObjectMeta

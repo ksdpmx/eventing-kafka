@@ -19,6 +19,7 @@ package kafkachannel
 import (
 	"context"
 	"fmt"
+	"k8s.io/utils/pointer"
 	"strconv"
 	"time"
 
@@ -64,7 +65,10 @@ func (r *Reconciler) reconcileDispatcher(ctx context.Context, channel *kafkav1be
 	// Reconcile The Dispatcher's Service (For Prometheus Only)
 	serviceErr := r.reconcileDispatcherService(ctx, logger, channel)
 	if serviceErr != nil {
-		controller.GetEventRecorder(ctx).Eventf(channel, corev1.EventTypeWarning, event.DispatcherServiceReconciliationFailed.String(), "Failed To Reconcile Dispatcher Service: %v", serviceErr)
+		controller.GetEventRecorder(ctx).Eventf(
+			channel, corev1.EventTypeWarning, event.DispatcherServiceReconciliationFailed.String(),
+			"Failed To Reconcile Dispatcher Service: %v", serviceErr,
+		)
 		logger.Error("Failed To Reconcile Dispatcher Service", zap.Error(serviceErr))
 	} else {
 		logger.Info("Successfully Reconciled Dispatcher Service")
@@ -73,7 +77,10 @@ func (r *Reconciler) reconcileDispatcher(ctx context.Context, channel *kafkav1be
 	// Reconcile The Dispatcher's Deployment
 	deploymentErr := r.reconcileDispatcherDeployment(ctx, logger, channel)
 	if deploymentErr != nil {
-		controller.GetEventRecorder(ctx).Eventf(channel, corev1.EventTypeWarning, event.DispatcherDeploymentReconciliationFailed.String(), "Failed To Reconcile Dispatcher Deployment: %v", deploymentErr)
+		controller.GetEventRecorder(ctx).Eventf(
+			channel, corev1.EventTypeWarning, event.DispatcherDeploymentReconciliationFailed.String(),
+			"Failed To Reconcile Dispatcher Deployment: %v", deploymentErr,
+		)
 		logger.Error("Failed To Reconcile Dispatcher Deployment", zap.Error(deploymentErr))
 	} else {
 		logger.Info("Successfully Reconciled Dispatcher Deployment")
@@ -96,7 +103,10 @@ func (r *Reconciler) finalizeDispatcher(ctx context.Context, channel *kafkav1bet
 	// Finalize The Dispatcher's Service
 	serviceErr := r.finalizeDispatcherService(ctx, channel)
 	if serviceErr != nil {
-		controller.GetEventRecorder(ctx).Eventf(channel, corev1.EventTypeWarning, event.DispatcherServiceFinalizationFailed.String(), "Failed To Finalize Dispatcher Service: %v", serviceErr)
+		controller.GetEventRecorder(ctx).Eventf(
+			channel, corev1.EventTypeWarning, event.DispatcherServiceFinalizationFailed.String(),
+			"Failed To Finalize Dispatcher Service: %v", serviceErr,
+		)
 		logger.Error("Failed To Finalize Dispatcher Service", zap.Error(serviceErr))
 	} else {
 		logger.Info("Successfully Finalized Dispatcher Service")
@@ -105,7 +115,10 @@ func (r *Reconciler) finalizeDispatcher(ctx context.Context, channel *kafkav1bet
 	// Finalize The Dispatcher's Deployment
 	deploymentErr := r.finalizeDispatcherDeployment(ctx, logger, channel)
 	if deploymentErr != nil {
-		controller.GetEventRecorder(ctx).Eventf(channel, corev1.EventTypeWarning, event.DispatcherDeploymentFinalizationFailed.String(), "Failed To Finalize Dispatcher Deployment: %v", deploymentErr)
+		controller.GetEventRecorder(ctx).Eventf(
+			channel, corev1.EventTypeWarning, event.DispatcherDeploymentFinalizationFailed.String(),
+			"Failed To Finalize Dispatcher Deployment: %v", deploymentErr,
+		)
 		logger.Error("Failed To Finalize Dispatcher Deployment", zap.Error(deploymentErr))
 	} else {
 		logger.Info("Successfully Finalized Dispatcher Deployment")
@@ -124,7 +137,9 @@ func (r *Reconciler) finalizeDispatcher(ctx context.Context, channel *kafkav1bet
 //
 
 // Reconcile The Dispatcher Service
-func (r *Reconciler) reconcileDispatcherService(ctx context.Context, logger *zap.Logger, channel *kafkav1beta1.KafkaChannel) error {
+func (r *Reconciler) reconcileDispatcherService(
+	ctx context.Context, logger *zap.Logger, channel *kafkav1beta1.KafkaChannel,
+) error {
 
 	// Create A New Service For Comparison
 	newService := r.newDispatcherService(channel)
@@ -136,10 +151,15 @@ func (r *Reconciler) reconcileDispatcherService(ctx context.Context, logger *zap
 		// If The Service Was Not Found - Then Create A New One For The Channel
 		if errors.IsNotFound(err) {
 			logger.Info("Dispatcher Service Not Found - Creating New One")
-			_, err = r.kubeClientset.CoreV1().Services(newService.Namespace).Create(ctx, newService, metav1.CreateOptions{})
+			_, err = r.kubeClientset.CoreV1().Services(newService.Namespace).Create(
+				ctx, newService, metav1.CreateOptions{},
+			)
 			if err != nil {
 				logger.Error("Failed To Create Dispatcher Service", zap.Error(err))
-				distributedmessaging.MarkDispatcherServiceFailed(&channel.Status, event.DispatcherServiceReconciliationFailed.String(), "Failed To Create Dispatcher Service: %v", err)
+				distributedmessaging.MarkDispatcherServiceFailed(
+					&channel.Status, event.DispatcherServiceReconciliationFailed.String(),
+					"Failed To Create Dispatcher Service: %v", err,
+				)
 				return err
 			} else {
 				logger.Info("Successfully Created Dispatcher Service")
@@ -148,7 +168,10 @@ func (r *Reconciler) reconcileDispatcherService(ctx context.Context, logger *zap
 			}
 		} else {
 			logger.Error("Failed To Get Dispatcher Service", zap.Error(err))
-			distributedmessaging.MarkDispatcherServiceUnknown(&channel.Status, event.DispatcherServiceReconciliationFailed.String(), "Failed To Get Dispatcher Service: %v", err)
+			distributedmessaging.MarkDispatcherServiceUnknown(
+				&channel.Status, event.DispatcherServiceReconciliationFailed.String(),
+				"Failed To Get Dispatcher Service: %v", err,
+			)
 			return err
 		}
 
@@ -159,7 +182,12 @@ func (r *Reconciler) reconcileDispatcherService(ctx context.Context, logger *zap
 			logger.Info("Successfully Verified Dispatcher Service")
 		} else {
 			if util.HasFinalizer(r.finalizerName(), &newService.ObjectMeta) {
-				logger.Info("Blocking Pending Deletion Of Dispatcher Service (Finalizer Detected)")
+				// remove the finalizer to unblock the deletion
+				logger.Warn("Removing Finalizer To Unblock Pending Deletion Of Dispatcher Service")
+				util.RemoveFinalizer(r.finalizerName(), &existingService.ObjectMeta)
+				_, err = r.kubeClientset.CoreV1().Services(existingService.Namespace).Update(
+					ctx, existingService, metav1.UpdateOptions{})
+				return nil
 			} else {
 				logger.Warn("Unable To Block Pending Deletion Of Dispatcher Service (Finalizer Missing)")
 			}
@@ -171,13 +199,24 @@ func (r *Reconciler) reconcileDispatcherService(ctx context.Context, logger *zap
 
 		// Patch the service in Kubernetes if necessary
 		if needsUpdate {
-			_, err = r.kubeClientset.CoreV1().Services(existingService.Namespace).Patch(ctx, existingService.Name, types.JSONPatchType, patch, metav1.PatchOptions{})
+			_, err = r.kubeClientset.CoreV1().Services(existingService.Namespace).Patch(
+				ctx, existingService.Name, types.JSONPatchType, patch, metav1.PatchOptions{},
+			)
 			if err == nil {
-				controller.GetEventRecorder(ctx).Event(channel, corev1.EventTypeNormal, event.DispatcherServicePatched.String(), "Dispatcher Service Patched")
+				controller.GetEventRecorder(ctx).Event(
+					channel, corev1.EventTypeNormal, event.DispatcherServicePatched.String(),
+					"Dispatcher Service Patched",
+				)
 				logger.Info("Dispatcher Service Changed - Patch Applied")
 			} else {
-				controller.GetEventRecorder(ctx).Event(channel, corev1.EventTypeWarning, event.DispatcherServicePatchFailed.String(), "Dispatcher Service Patch Failed")
-				distributedmessaging.MarkDispatcherServiceFailed(&channel.Status, event.DispatcherServicePatchFailed.String(), "Failed To Patch Dispatcher Service: %v", err)
+				controller.GetEventRecorder(ctx).Event(
+					channel, corev1.EventTypeWarning, event.DispatcherServicePatchFailed.String(),
+					"Dispatcher Service Patch Failed",
+				)
+				distributedmessaging.MarkDispatcherServiceFailed(
+					&channel.Status, event.DispatcherServicePatchFailed.String(),
+					"Failed To Patch Dispatcher Service: %v", err,
+				)
 				logger.Error("Dispatcher Service Patch Failed", zap.Error(err))
 				return err
 			}
@@ -214,7 +253,9 @@ func (r *Reconciler) finalizeDispatcherService(ctx context.Context, channel *kaf
 
 		// Remove The Finalizer From The Dispatcher Service & Update
 		util.RemoveFinalizer(r.finalizerName(), &service.ObjectMeta)
-		service, err := r.kubeClientset.CoreV1().Services(service.Namespace).Update(ctx, service, metav1.UpdateOptions{})
+		service, err := r.kubeClientset.CoreV1().Services(service.Namespace).Update(
+			ctx, service, metav1.UpdateOptions{},
+		)
 		if err != nil {
 			logger.Error("Failed To Remove Finalizer From Dispatcher Service", zap.Error(err))
 			return err
@@ -249,6 +290,7 @@ func (r *Reconciler) getDispatcherService(channel *kafkav1beta1.KafkaChannel) (*
 
 // Create Dispatcher Service Model For The Specified Subscription
 func (r *Reconciler) newDispatcherService(channel *kafkav1beta1.KafkaChannel) *corev1.Service {
+	tenant := channel.Spec.Tenant
 
 	// Get The Dispatcher Service Name For The Channel
 	serviceName := util.DispatcherDnsSafeName(channel)
@@ -287,8 +329,10 @@ func (r *Reconciler) newDispatcherService(channel *kafkav1beta1.KafkaChannel) *c
 	}
 
 	// Update The Dispatcher Service's Annotations & Labels With Custom Config Values
-	service.Annotations = commonconfig.JoinStringMaps(service.Annotations, r.config.Channel.Dispatcher.ServiceAnnotations)
-	service.Labels = commonconfig.JoinStringMaps(service.Labels, r.config.Channel.Dispatcher.ServiceLabels)
+	service.Annotations = commonconfig.JoinStringMaps(
+		service.Annotations, r.configs[tenant].Channel.Dispatcher.ServiceAnnotations,
+	)
+	service.Labels = commonconfig.JoinStringMaps(service.Labels, r.configs[tenant].Channel.Dispatcher.ServiceLabels)
 
 	// Return The Dispatcher Service
 	return service
@@ -299,13 +343,18 @@ func (r *Reconciler) newDispatcherService(channel *kafkav1beta1.KafkaChannel) *c
 //
 
 // Reconcile The Dispatcher Deployment
-func (r *Reconciler) reconcileDispatcherDeployment(ctx context.Context, logger *zap.Logger, channel *kafkav1beta1.KafkaChannel) error {
+func (r *Reconciler) reconcileDispatcherDeployment(
+	ctx context.Context, logger *zap.Logger, channel *kafkav1beta1.KafkaChannel,
+) error {
 
 	// Create A New Deployment For Comparison
 	newDeployment, err := r.newDispatcherDeployment(logger, channel)
 	if err != nil {
 		logger.Error("Failed To Create Dispatcher Deployment YAML", zap.Error(err))
-		distributedmessaging.MarkDispatcherDeploymentFailed(&channel.Status, event.DispatcherDeploymentReconciliationFailed.String(), "Failed To Generate Dispatcher Deployment: %v", err)
+		distributedmessaging.MarkDispatcherDeploymentFailed(
+			&channel.Status, event.DispatcherDeploymentReconciliationFailed.String(),
+			"Failed To Generate Dispatcher Deployment: %v", err,
+		)
 		return err
 	}
 
@@ -318,10 +367,15 @@ func (r *Reconciler) reconcileDispatcherDeployment(ctx context.Context, logger *
 
 			// Then Create The New Deployment For The Channel
 			logger.Info("Dispatcher Deployment Not Found - Creating New One")
-			newDeployment, err = r.kubeClientset.AppsV1().Deployments(newDeployment.Namespace).Create(ctx, newDeployment, metav1.CreateOptions{})
+			newDeployment, err = r.kubeClientset.AppsV1().Deployments(newDeployment.Namespace).Create(
+				ctx, newDeployment, metav1.CreateOptions{},
+			)
 			if err != nil {
 				logger.Error("Failed To Create Dispatcher Deployment", zap.Error(err))
-				distributedmessaging.MarkDispatcherDeploymentFailed(&channel.Status, event.DispatcherDeploymentReconciliationFailed.String(), "Failed To Create Dispatcher Deployment: %v", err)
+				distributedmessaging.MarkDispatcherDeploymentFailed(
+					&channel.Status, event.DispatcherDeploymentReconciliationFailed.String(),
+					"Failed To Create Dispatcher Deployment: %v", err,
+				)
 				return err
 			} else {
 				logger.Info("Successfully Created Dispatcher Deployment")
@@ -331,7 +385,10 @@ func (r *Reconciler) reconcileDispatcherDeployment(ctx context.Context, logger *
 		} else {
 			// Failed In Attempt To Get Deployment From K8S
 			logger.Error("Failed To Get Dispatcher Deployment", zap.Error(err))
-			distributedmessaging.MarkDispatcherDeploymentUnknown(&channel.Status, event.DispatcherDeploymentReconciliationFailed.String(), "Failed To Get Dispatcher Deployment: %v", err)
+			distributedmessaging.MarkDispatcherDeploymentUnknown(
+				&channel.Status, event.DispatcherDeploymentReconciliationFailed.String(),
+				"Failed To Get Dispatcher Deployment: %v", err,
+			)
 			return err
 		}
 
@@ -342,7 +399,12 @@ func (r *Reconciler) reconcileDispatcherDeployment(ctx context.Context, logger *
 			logger.Info("Successfully Verified Dispatcher Deployment")
 		} else {
 			if util.HasFinalizer(r.finalizerName(), &newDeployment.ObjectMeta) {
-				logger.Info("Blocking Pending Deletion Of Dispatcher Deployment (Finalizer Detected)")
+				// remove the finalizer to unblock the deletion
+				logger.Warn("Removing Finalizer To Unblock Pending Deletion Of Dispatcher Deployment")
+				util.RemoveFinalizer(r.finalizerName(), &existingDeployment.ObjectMeta)
+				_, err = r.kubeClientset.AppsV1().Deployments(existingDeployment.Namespace).Update(
+					ctx, existingDeployment, metav1.UpdateOptions{})
+				return nil
 			} else {
 				logger.Warn("Unable To Block Pending Deletion Of Dispatcher Deployment (Finalizer Missing)")
 			}
@@ -355,13 +417,24 @@ func (r *Reconciler) reconcileDispatcherDeployment(ctx context.Context, logger *
 
 		// Update the deployment in Kubernetes if necessary
 		if needsUpdate {
-			updatedDeployment, err = r.kubeClientset.AppsV1().Deployments(newDeployment.Namespace).Update(ctx, updatedDeployment, metav1.UpdateOptions{})
+			updatedDeployment, err = r.kubeClientset.AppsV1().Deployments(newDeployment.Namespace).Update(
+				ctx, updatedDeployment, metav1.UpdateOptions{},
+			)
 			if err == nil {
-				controller.GetEventRecorder(ctx).Event(channel, corev1.EventTypeNormal, event.DispatcherDeploymentUpdated.String(), "Dispatcher Deployment Updated")
+				controller.GetEventRecorder(ctx).Event(
+					channel, corev1.EventTypeNormal, event.DispatcherDeploymentUpdated.String(),
+					"Dispatcher Deployment Updated",
+				)
 				logger.Info("Dispatcher Deployment Changed - Update Applied")
 			} else {
-				controller.GetEventRecorder(ctx).Event(channel, corev1.EventTypeWarning, event.DispatcherDeploymentUpdateFailed.String(), "Dispatcher Deployment Update Failed")
-				distributedmessaging.MarkDispatcherDeploymentFailed(&channel.Status, event.DispatcherDeploymentUpdateFailed.String(), "Failed To Update Dispatcher Deployment: %v", err)
+				controller.GetEventRecorder(ctx).Event(
+					channel, corev1.EventTypeWarning, event.DispatcherDeploymentUpdateFailed.String(),
+					"Dispatcher Deployment Update Failed",
+				)
+				distributedmessaging.MarkDispatcherDeploymentFailed(
+					&channel.Status, event.DispatcherDeploymentUpdateFailed.String(),
+					"Failed To Update Dispatcher Deployment: %v", err,
+				)
 				logger.Info("Dispatcher Deployment Failed", zap.Error(err))
 				return err
 			}
@@ -374,7 +447,9 @@ func (r *Reconciler) reconcileDispatcherDeployment(ctx context.Context, logger *
 }
 
 // Finalize The Dispatcher Deployment
-func (r *Reconciler) finalizeDispatcherDeployment(ctx context.Context, logger *zap.Logger, channel *kafkav1beta1.KafkaChannel) error {
+func (r *Reconciler) finalizeDispatcherDeployment(
+	ctx context.Context, logger *zap.Logger, channel *kafkav1beta1.KafkaChannel,
+) error {
 
 	// Attempt To Get The Dispatcher Deployment Associated With The Specified Channel
 	deployment, err := r.getDispatcherDeployment(channel)
@@ -395,7 +470,9 @@ func (r *Reconciler) finalizeDispatcherDeployment(ctx context.Context, logger *z
 
 		// Remove The Finalizer From The Dispatcher Deployment & Update
 		util.RemoveFinalizer(r.finalizerName(), &deployment.ObjectMeta)
-		deployment, err := r.kubeClientset.AppsV1().Deployments(deployment.Namespace).Update(ctx, deployment, metav1.UpdateOptions{})
+		deployment, err := r.kubeClientset.AppsV1().Deployments(deployment.Namespace).Update(
+			ctx, deployment, metav1.UpdateOptions{},
+		)
 		if err != nil {
 			logger.Error("Failed To Remove Finalizer From Dispatcher Deployment", zap.Error(err))
 			return err
@@ -404,7 +481,9 @@ func (r *Reconciler) finalizeDispatcherDeployment(ctx context.Context, logger *z
 		}
 
 		// Delete The Updated Dispatcher Deployment
-		err = r.kubeClientset.AppsV1().Deployments(deployment.Namespace).Delete(ctx, deployment.Name, metav1.DeleteOptions{})
+		err = r.kubeClientset.AppsV1().Deployments(deployment.Namespace).Delete(
+			ctx, deployment.Name, metav1.DeleteOptions{},
+		)
 		if err != nil {
 			logger.Error("Failed To Delete Dispatcher Deployment", zap.Error(err))
 			return err
@@ -429,13 +508,17 @@ func (r *Reconciler) getDispatcherDeployment(channel *kafkav1beta1.KafkaChannel)
 }
 
 // Create Dispatcher Deployment Model For The Specified Channel
-func (r *Reconciler) newDispatcherDeployment(logger *zap.Logger, channel *kafkav1beta1.KafkaChannel) (*appsv1.Deployment, error) {
+func (r *Reconciler) newDispatcherDeployment(
+	logger *zap.Logger, channel *kafkav1beta1.KafkaChannel,
+) (*appsv1.Deployment, error) {
+	tenant := channel.Spec.Tenant
+	// use the replicas in the channel spec instead of the configmap
+	replicas := channel.Spec.Replicas
+	nodeSelector := channel.Spec.NodeSelector
+	affinity := channel.Spec.Affinity
 
 	// Get The Dispatcher Deployment Name For The Channel
 	deploymentName := util.DispatcherDnsSafeName(channel)
-
-	// Replicas Int Value For De-Referencing
-	replicas := int32(r.config.Channel.Dispatcher.Replicas)
 
 	// Create The Dispatcher Container Environment Variables
 	envVars, err := r.dispatcherDeploymentEnvVars(channel)
@@ -449,18 +532,18 @@ func (r *Reconciler) newDispatcherDeployment(logger *zap.Logger, channel *kafkav
 	// If we want "no limit" or "no request" then the entry must not be present in the map.
 	// Note: Since a "Quantity" type has no nil value, we use the Zero value to represent unlimited.
 	resourceLimits := make(map[corev1.ResourceName]resource.Quantity)
-	if !r.config.Channel.Dispatcher.MemoryLimit.IsZero() {
-		resourceLimits[corev1.ResourceMemory] = r.config.Channel.Dispatcher.MemoryLimit
+	if !r.configs[tenant].Channel.Dispatcher.MemoryLimit.IsZero() {
+		resourceLimits[corev1.ResourceMemory] = r.configs[tenant].Channel.Dispatcher.MemoryLimit
 	}
-	if !r.config.Channel.Dispatcher.CpuLimit.IsZero() {
-		resourceLimits[corev1.ResourceCPU] = r.config.Channel.Dispatcher.CpuLimit
+	if !r.configs[tenant].Channel.Dispatcher.CpuLimit.IsZero() {
+		resourceLimits[corev1.ResourceCPU] = r.configs[tenant].Channel.Dispatcher.CpuLimit
 	}
 	resourceRequests := make(map[corev1.ResourceName]resource.Quantity)
-	if !r.config.Channel.Dispatcher.MemoryRequest.IsZero() {
-		resourceRequests[corev1.ResourceMemory] = r.config.Channel.Dispatcher.MemoryRequest
+	if !r.configs[tenant].Channel.Dispatcher.MemoryRequest.IsZero() {
+		resourceRequests[corev1.ResourceMemory] = r.configs[tenant].Channel.Dispatcher.MemoryRequest
 	}
-	if !r.config.Channel.Dispatcher.CpuRequest.IsZero() {
-		resourceRequests[corev1.ResourceCPU] = r.config.Channel.Dispatcher.CpuRequest
+	if !r.configs[tenant].Channel.Dispatcher.CpuRequest.IsZero() {
+		resourceRequests[corev1.ResourceCPU] = r.configs[tenant].Channel.Dispatcher.CpuRequest
 	}
 
 	// If either the limits or requests are an entirely-empty map, this will be translated to a nil
@@ -487,6 +570,7 @@ func (r *Reconciler) newDispatcherDeployment(logger *zap.Logger, channel *kafkav
 				constants.KafkaChannelDispatcherLabel: "true",            // Identifies the Deployment as being a KafkaChannel "Dispatcher"
 				constants.KafkaChannelNameLabel:       channel.Name,      // Identifies the Deployment's Owning KafkaChannel's Name
 				constants.KafkaChannelNamespaceLabel:  channel.Namespace, // Identifies the Deployment's Owning KafkaChannel's Namespace
+				// constants.KafkaChannelTenant:          tenant,
 			},
 			// K8S Does NOT Support Cross-Namespace OwnerReferences
 			// Instead Manage The Lifecycle Directly Via Finalizers (No K8S Garbage Collection)
@@ -497,6 +581,7 @@ func (r *Reconciler) newDispatcherDeployment(logger *zap.Logger, channel *kafkav
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
 					constants.AppLabel: deploymentName, // Matches Template ObjectMeta Pods
+					// constants.KafkaChannelTenant: tenant,
 				},
 			},
 			Template: corev1.PodTemplateSpec{
@@ -506,9 +591,7 @@ func (r *Reconciler) newDispatcherDeployment(logger *zap.Logger, channel *kafkav
 						constants.KafkaChannelDispatcherLabel: "true",            // Identifies the Pod as being a KafkaChannel "Dispatcher"
 						constants.KafkaChannelNameLabel:       channel.Name,      // Identifies the Pod's Owning KafkaChannel's Name
 						constants.KafkaChannelNamespaceLabel:  channel.Namespace, // Identifies the Pod's Owning KafkaChannel's Namespace
-					},
-					Annotations: map[string]string{
-						commonconstants.ConfigMapHashAnnotationKey: r.kafkaConfigMapHash,
+						// constants.KafkaChannelTenant:          tenant,
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -557,14 +640,19 @@ func (r *Reconciler) newDispatcherDeployment(logger *zap.Logger, channel *kafkav
 							},
 						},
 					},
+					NodeSelector: nodeSelector,
+					Affinity:     affinity,
 					Volumes: []corev1.Volume{
 						{
 							Name: commonconstants.SettingsConfigMapName,
-							VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
-								LocalObjectReference: corev1.LocalObjectReference{
-									Name: commonconstants.SettingsConfigMapName,
+							VolumeSource: corev1.VolumeSource{
+								ConfigMap: &corev1.ConfigMapVolumeSource{
+									DefaultMode: pointer.Int32Ptr(420),
+									LocalObjectReference: corev1.LocalObjectReference{
+										Name: commonconstants.SettingsConfigMapName + "-" + tenant,
+									},
 								},
-							}},
+							},
 						},
 					},
 				},
@@ -573,10 +661,18 @@ func (r *Reconciler) newDispatcherDeployment(logger *zap.Logger, channel *kafkav
 	}
 
 	// Update The Dispatcher Deployment's Annotations & Labels With Custom Config Values
-	deployment.ObjectMeta.Annotations = commonconfig.JoinStringMaps(deployment.ObjectMeta.Annotations, r.config.Channel.Dispatcher.DeploymentAnnotations)
-	deployment.ObjectMeta.Labels = commonconfig.JoinStringMaps(deployment.ObjectMeta.Labels, r.config.Channel.Dispatcher.DeploymentLabels)
-	deployment.Spec.Template.ObjectMeta.Annotations = commonconfig.JoinStringMaps(deployment.Spec.Template.ObjectMeta.Annotations, r.config.Channel.Dispatcher.PodAnnotations)
-	deployment.Spec.Template.ObjectMeta.Labels = commonconfig.JoinStringMaps(deployment.Spec.Template.ObjectMeta.Labels, r.config.Channel.Dispatcher.PodLabels)
+	deployment.ObjectMeta.Annotations = commonconfig.JoinStringMaps(
+		deployment.ObjectMeta.Annotations, r.configs[tenant].Channel.Dispatcher.DeploymentAnnotations,
+	)
+	deployment.ObjectMeta.Labels = commonconfig.JoinStringMaps(
+		deployment.ObjectMeta.Labels, r.configs[tenant].Channel.Dispatcher.DeploymentLabels,
+	)
+	deployment.Spec.Template.ObjectMeta.Annotations = commonconfig.JoinStringMaps(
+		deployment.Spec.Template.ObjectMeta.Annotations, r.configs[tenant].Channel.Dispatcher.PodAnnotations,
+	)
+	deployment.Spec.Template.ObjectMeta.Labels = commonconfig.JoinStringMaps(
+		deployment.Spec.Template.ObjectMeta.Labels, r.configs[tenant].Channel.Dispatcher.PodLabels,
+	)
 
 	// Return The Dispatcher Deployment
 	return deployment, nil
@@ -584,6 +680,7 @@ func (r *Reconciler) newDispatcherDeployment(logger *zap.Logger, channel *kafkav
 
 // Create The Dispatcher Container's Env Vars
 func (r *Reconciler) dispatcherDeploymentEnvVars(channel *kafkav1beta1.KafkaChannel) ([]corev1.EnvVar, error) {
+	tenant := channel.Spec.Tenant
 
 	// Get The TopicName For Specified Channel
 	topicName := util.TopicName(channel)
@@ -641,7 +738,7 @@ func (r *Reconciler) dispatcherDeploymentEnvVars(channel *kafkav1beta1.KafkaChan
 	}
 
 	// If The Kafka Secret Name Is Specified Then Append Relevant Env Vars
-	if len(r.config.Kafka.AuthSecretName) <= 0 {
+	if len(r.configs[tenant].Kafka.AuthSecretName) <= 0 {
 
 		// Received Invalid Kafka Secret Name - Cannot Proceed
 		return nil, fmt.Errorf("invalid authSecretName for topic '%s'", topicName)
@@ -649,16 +746,20 @@ func (r *Reconciler) dispatcherDeploymentEnvVars(channel *kafkav1beta1.KafkaChan
 	} else {
 
 		// Append The Secret Name As Env Var
-		envVars = append(envVars, corev1.EnvVar{
-			Name:  commonenv.KafkaSecretNameEnvVarKey,
-			Value: r.config.Kafka.AuthSecretName,
-		})
+		envVars = append(
+			envVars, corev1.EnvVar{
+				Name:  commonenv.KafkaSecretNameEnvVarKey,
+				Value: r.configs[tenant].Kafka.AuthSecretName,
+			},
+		)
 
 		// Append The Secret Namespace As Env Var
-		envVars = append(envVars, corev1.EnvVar{
-			Name:  commonenv.KafkaSecretNamespaceEnvVarKey,
-			Value: r.config.Kafka.AuthSecretNamespace,
-		})
+		envVars = append(
+			envVars, corev1.EnvVar{
+				Name:  commonenv.KafkaSecretNamespaceEnvVarKey,
+				Value: r.configs[tenant].Kafka.AuthSecretNamespace,
+			},
+		)
 
 	}
 

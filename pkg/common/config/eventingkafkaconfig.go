@@ -18,6 +18,7 @@ package config
 
 import (
 	"github.com/Shopify/sarama"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
 	"knative.dev/eventing-kafka/pkg/common/client"
@@ -45,6 +46,8 @@ type EKKubernetesConfig struct {
 // EKReceiverConfig has the base Kubernetes fields (Cpu, Memory, Replicas) only
 type EKReceiverConfig struct {
 	EKKubernetesConfig
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+	Affinity     *corev1.Affinity  `json:"affinity,omitempty"`
 }
 
 // EKDispatcherConfig has the base Kubernetes fields (Cpu, Memory, Replicas) only

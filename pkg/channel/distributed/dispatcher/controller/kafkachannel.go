@@ -187,6 +187,8 @@ func (r Reconciler) Reconcile(ctx context.Context, key string) error {
 		return err
 	}
 
+	r.logger.Warn("KafkaChannel Retrieved", zap.String("namespace", namespace), zap.String("name", name))
+
 	if !original.Status.IsReady() {
 		return fmt.Errorf("channel is not ready - cannot configure and update subscriber status")
 	}

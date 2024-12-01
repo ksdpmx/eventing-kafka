@@ -19,6 +19,13 @@ package kafkachannel
 import (
 	"context"
 	"fmt"
+	"gopkg.in/yaml.v2"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/pointer"
+	commonconstants "knative.dev/eventing-kafka/pkg/common/constants"
+	"knative.dev/eventing-kafka/pkg/common/kafka/sarama"
+	"reflect"
 	"strings"
 	"sync"
 
@@ -43,7 +50,6 @@ import (
 	"knative.dev/eventing-kafka/pkg/client/injection/reconciler/messaging/v1beta1/kafkachannel"
 	kafkalisters "knative.dev/eventing-kafka/pkg/client/listers/messaging/v1beta1"
 	commonconfig "knative.dev/eventing-kafka/pkg/common/config"
-	kafkasarama "knative.dev/eventing-kafka/pkg/common/kafka/sarama"
 )
 
 // Reconciler Implements controller.Reconciler for KafkaChannel Resources
@@ -52,8 +58,10 @@ type Reconciler struct {
 	kafkaClientSet       kafkaclientset.Interface
 	adminClientType      types.AdminClientType
 	adminClient          types.AdminClientInterface
+	adminClients         map[string]types.AdminClientInterface
 	environment          *env.Environment
 	config               *commonconfig.EventingKafkaConfig
+	configs              map[string]*commonconfig.EventingKafkaConfig
 	kafkachannelLister   kafkalisters.KafkaChannelLister
 	kafkachannelInformer cache.SharedIndexInformer
 	deploymentLister     appsv1listers.DeploymentLister
@@ -67,19 +75,18 @@ var (
 	_ kafkachannel.Finalizer = (*Reconciler)(nil) // Verify Reconciler Implements Finalizer
 )
 
-//
 // SetKafkaAdminClient Clears / Re-Sets The Kafka AdminClient On The Reconciler
 //
 // Ideally we would re-use the Kafka AdminClient but due to Issues with the Sarama ClusterAdmin we're
 // forced to recreate a new connection every time.  We were seeing "broken-pipe" failures (non-recoverable)
 // with the ClusterAdmin after periods of inactivity.
-//   https://github.com/Shopify/sarama/issues/1162
-//   https://github.com/Shopify/sarama/issues/866
+//
+//	https://github.com/Shopify/sarama/issues/1162
+//	https://github.com/Shopify/sarama/issues/866
 //
 // EventHub AdminClients could be reused, and this is somewhat inefficient for them, but they are very simple
 // lightweight REST clients so recreating them isn't a big deal and it simplifies the code significantly to
 // not have to support both use cases.
-//
 func (r *Reconciler) SetKafkaAdminClient(ctx context.Context) error {
 	_ = r.ClearKafkaAdminClient(ctx) // Attempt to close any lingering connections, ignore errors and continue
 	var err error
@@ -88,6 +95,24 @@ func (r *Reconciler) SetKafkaAdminClient(ctx context.Context) error {
 	if err != nil {
 		logger := logging.FromContext(ctx)
 		logger.Error("Failed To Create Kafka AdminClient", zap.Error(err))
+	}
+	return err
+}
+
+func (r *Reconciler) SetKafkaAdminClients(ctx context.Context) error {
+	_ = r.ClearKafkaAdminClients(ctx)
+	if r.adminClients == nil {
+		r.adminClients = make(map[string]types.AdminClientInterface)
+	}
+
+	var err error
+	for tenant, config := range r.configs {
+		brokers := strings.Split(config.Kafka.Brokers, ",")
+		r.adminClients[tenant], err = admin.CreateAdminClient(ctx, brokers, config.Sarama.Config, r.adminClientType)
+		if err != nil {
+			logger := logging.FromContext(ctx)
+			logger.Error("Failed To Create Kafka AdminClient", zap.Error(err))
+		}
 	}
 	return err
 }
@@ -102,6 +127,22 @@ func (r *Reconciler) ClearKafkaAdminClient(ctx context.Context) error {
 			logger.Error("Failed To Close Kafka AdminClient", zap.Error(err))
 		}
 		r.adminClient = nil
+	}
+	return err
+}
+
+// ClearKafkaAdminClients Clears (Closes) The Reconciler's Kafka AdminClients
+func (r *Reconciler) ClearKafkaAdminClients(ctx context.Context) error {
+	var err error
+	if r.adminClients != nil && len(r.adminClients) != 0 {
+		for _, client := range r.adminClients {
+			err = client.Close()
+			if err != nil {
+				logger := logging.FromContext(ctx)
+				logger.Error("Failed To Close Kafka AdminClient", zap.Error(err))
+			}
+		}
+		r.adminClients = nil
 	}
 	return err
 }
@@ -129,12 +170,12 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, channel *kafkav1beta1.Ka
 	r.adminMutex.Lock()
 	defer r.adminMutex.Unlock()
 
-	// Create A New Kafka AdminClient For Each Reconciliation Attempt
-	err := r.SetKafkaAdminClient(ctx)
+	// Create New Kafka AdminClients For Each Reconciliation Attempt
+	err := r.SetKafkaAdminClients(ctx)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = r.ClearKafkaAdminClient(ctx) }() // Ignore errors as nothing else can be done
+	defer func() { _ = r.ClearKafkaAdminClients(ctx) }() // Ignore errors as nothing else can be done
 
 	// Reset The Channel's Status Conditions To Unknown (Addressable, Topic, Service, Deployment, etc...)
 	channel.Status.InitializeConditions()
@@ -150,7 +191,10 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, channel *kafkav1beta1.Ka
 	// Return Success
 	logger.Info("Successfully Reconciled KafkaChannel", zap.Any("Channel", channel))
 	channel.Status.ObservedGeneration = channel.Generation
-	return reconciler.NewEvent(corev1.EventTypeNormal, event.KafkaChannelReconciled.String(), "KafkaChannel Reconciled Successfully: \"%s/%s\"", channel.Namespace, channel.Name)
+	return reconciler.NewEvent(
+		corev1.EventTypeNormal, event.KafkaChannelReconciled.String(),
+		"KafkaChannel Reconciled Successfully: \"%s/%s\"", channel.Namespace, channel.Name,
+	)
 }
 
 // FinalizeKind Implements The Finalizer Interface & Is Responsible For Performing The Finalization (Topic Deletion)
@@ -169,12 +213,12 @@ func (r *Reconciler) FinalizeKind(ctx context.Context, channel *kafkav1beta1.Kaf
 	r.adminMutex.Lock()
 	defer r.adminMutex.Unlock()
 
-	// Create A New Kafka AdminClient For Each Reconciliation Attempt
-	err := r.SetKafkaAdminClient(ctx)
+	// Create New Kafka AdminClients For Each Reconciliation Attempt
+	err := r.SetKafkaAdminClients(ctx)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = r.ClearKafkaAdminClient(ctx) }() // Ignore errors as nothing else can be done
+	defer func() { _ = r.ClearKafkaAdminClients(ctx) }() // Ignore errors as nothing else can be done
 
 	// Finalize The Dispatcher (Manual Finalization Due To Cross-Namespace Ownership)
 	err = r.finalizeDispatcher(ctx, channel)
@@ -192,11 +236,15 @@ func (r *Reconciler) FinalizeKind(ctx context.Context, channel *kafkav1beta1.Kaf
 
 	// Return Success
 	logger.Info("Successfully Finalized KafkaChannel")
-	return reconciler.NewEvent(corev1.EventTypeNormal, event.KafkaChannelFinalized.String(), "KafkaChannel Finalized Successfully: \"%s/%s\"", channel.Namespace, channel.Name)
+	return reconciler.NewEvent(
+		corev1.EventTypeNormal, event.KafkaChannelFinalized.String(), "KafkaChannel Finalized Successfully: \"%s/%s\"",
+		channel.Namespace, channel.Name,
+	)
 }
 
 // Perform The Actual Channel Reconciliation
 func (r *Reconciler) reconcile(ctx context.Context, channel *kafkav1beta1.KafkaChannel) error {
+	tenant := channel.Spec.Tenant
 
 	// NOTE - The sequential order of reconciliation must be "Topic" then "Channel / Dispatcher" in order for the
 	//        EventHub Cache to know the dynamically determined EventHub Namespace / Kafka Secret selected for the topic.
@@ -214,7 +262,7 @@ func (r *Reconciler) reconcile(ctx context.Context, channel *kafkav1beta1.KafkaC
 	// ConfigMap.  Therefore, we will instead check the Kafka Secret associated with the
 	// KafkaChannel here.
 	//
-	if len(r.config.Kafka.AuthSecretName) > 0 {
+	if len(r.configs[tenant].Kafka.AuthSecretName) > 0 {
 		channel.Status.MarkConfigTrue()
 	} else {
 		channel.Status.MarkConfigFailed(event.KafkaSecretReconciled.String(), "No Kafka Secret For KafkaChannel")
@@ -254,26 +302,128 @@ func (r *Reconciler) updateKafkaConfig(ctx context.Context, configMap *corev1.Co
 		return fmt.Errorf("nil configMap passed to updateKafkaConfig")
 	}
 
-	logger.Info("Reloading Kafka configuration")
-
-	// Validate The ConfigMap Data
+	// Validate & Reload ConfigMap
 	if configMap.Data == nil {
-		return fmt.Errorf("configMap.Data is nil")
+		return fmt.Errorf("configMap.Data is mandatory")
+	}
+	for tenant, tenantConfig := range configMap.Data {
+		if len(tenantConfig) == 0 {
+			return fmt.Errorf("configMap.Data[%s] is mandatory", tenant)
+		}
+		data := make(map[string]string)
+		if err := yaml.Unmarshal([]byte(tenantConfig), &data); err != nil {
+			return err
+		}
+		if _, ok := data["eventing-kafka"]; !ok {
+			return fmt.Errorf("eventing-kafka config is mandatory")
+		}
+		if _, ok := data["sarama"]; !ok {
+			return fmt.Errorf("sarama config is mandatory")
+		}
+
+		// reload config from configmap
+		configuration, err := sarama.LoadSettings(ctx, constants.Component, data, sarama.LoadAuthConfig)
+		if err != nil {
+			logger.Error(fmt.Sprintf("Failed To Reload Eventing-Kafka Config for tenant %s", tenant), zap.Error(err))
+		}
+		r.configs[tenant] = configuration
 	}
 
-	ekConfig, err := kafkasarama.LoadSettings(ctx, constants.Component, configMap.Data, kafkasarama.LoadAuthConfig)
+	logger.Warn("Updating managed configmaps for different tenants")
+
+	// checking wiri
+	oldMCMs, err := r.kubeClientset.CoreV1().ConfigMaps(r.environment.SystemNamespace).List(ctx, metav1.ListOptions{LabelSelector: constants.IsManagedLabel + "=true"})
 	if err != nil {
 		return err
-	} else if ekConfig == nil {
-		return fmt.Errorf("eventing-kafka config is nil")
 	}
-	// Enable Sarama Logging If Specified In ConfigMap
-	kafkasarama.EnableSaramaLogging(ekConfig.Sarama.EnableLogging)
-	logger.Debug("Updated Sarama logging", zap.Bool("Kafka.EnableSaramaLogging", ekConfig.Sarama.EnableLogging))
+	for _, oldMCM := range oldMCMs.Items {
+		if !strings.HasPrefix(oldMCM.Name, commonconstants.SettingsConfigMapName+"-") {
+			logger.Warn("Non-managed configmap is found in wiri, ignoring", zap.String("configmap", oldMCM.Name))
+			continue
+		}
+		if _, ok := configMap.Data[oldMCM.Name[len(commonconstants.SettingsConfigMapName+"-"):]]; !ok {
+			logger.Warn("Managed configmap is not found in wisb, deleting", zap.String("configmap", oldMCM.Name))
+			if err := r.kubeClientset.CoreV1().ConfigMaps(r.environment.SystemNamespace).Delete(ctx, oldMCM.Name, metav1.DeleteOptions{}); err != nil {
+				return err
+			}
+			logger.Warn("Dangling managed configmap has been deleted", zap.String("configmap", oldMCM.Name))
+		}
+	}
 
-	logger.Info("ConfigMap Changed; Updating Sarama And Eventing-Kafka Configuration")
-	r.config = ekConfig
+	// checking wisb
+	for tenant, tenantConfig := range configMap.Data {
+		data := make(map[string]string)
+		// err should have been caught by the validation above
+		if err := yaml.Unmarshal([]byte(tenantConfig), &data); err != nil {
+			return err
+		}
 
-	r.kafkaConfigMapHash = commonconfig.ConfigmapDataCheckSum(configMap.Data)
+		newMCM := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      commonconstants.SettingsConfigMapName + "-" + tenant,
+				Namespace: r.environment.SystemNamespace,
+				OwnerReferences: []metav1.OwnerReference{
+					{
+						APIVersion:         corev1.SchemeGroupVersion.String(),
+						Kind:               "ConfigMap",
+						Name:               commonconstants.SettingsConfigMapName,
+						UID:                configMap.UID,
+						Controller:         pointer.BoolPtr(true),
+						BlockOwnerDeletion: pointer.BoolPtr(true),
+					},
+				},
+				Labels: map[string]string{
+					constants.IsManagedLabel:     "true",
+					constants.KafkaChannelTenant: tenant,
+				},
+			},
+			Data: data,
+		}
+
+		oldMCM, err := r.kubeClientset.CoreV1().ConfigMaps(r.environment.SystemNamespace).Get(ctx, commonconstants.SettingsConfigMapName+"-"+tenant, metav1.GetOptions{})
+		isMCMUpdated := false
+		if err != nil {
+			if errors.IsNotFound(err) {
+				logger.Warn("Managed configmap is not found", zap.String("configmap", commonconstants.SettingsConfigMapName+"-"+tenant))
+				if _, err := r.kubeClientset.CoreV1().ConfigMaps(r.environment.SystemNamespace).Create(ctx, newMCM, metav1.CreateOptions{}); err != nil {
+					return err
+				}
+				isMCMUpdated = true
+				logger.Warn("Managed configmap has been created", zap.String("configmap", newMCM.Name))
+			} else {
+				return err
+			}
+		} else {
+			// TODO check metadata as well
+			if !reflect.DeepEqual(oldMCM.Data, newMCM.Data) {
+				logger.Warn("Managed configmap data has changed", zap.String("configmap", newMCM.Name))
+				if _, err := r.kubeClientset.CoreV1().ConfigMaps(r.environment.SystemNamespace).Update(ctx, newMCM, metav1.UpdateOptions{}); err != nil {
+					return err
+				}
+				isMCMUpdated = true
+				logger.Warn("Managed configmap has been updated", zap.String("configmap", newMCM.Name))
+			}
+		}
+
+		// reconcile receiver when needed
+		if isMCMUpdated && r.configs[tenant] != nil {
+			dummyChannel := &kafkav1beta1.KafkaChannel{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "dummy",
+					Namespace: r.environment.SystemNamespace,
+				},
+				Spec: kafkav1beta1.KafkaChannelSpec{
+					Tenant: tenant,
+				},
+			}
+			logger.Warn("Reconciling receiver for tenant", zap.String("tenant", tenant))
+			if err := r.reconcileReceiver(ctx, dummyChannel); err != nil {
+				return err
+			}
+		}
+	}
+
+	logger.Warn("Reloading Kafka configuration")
+
 	return nil
 }
