@@ -35,4 +35,7 @@ const (
 	CeKafkaHeaderKeySubject      = "ce_subject"
 	CeKafkaHeaderKeyDataSchema   = "ce_dataschema"
 	CeKafkaHeaderKeyPartitionKey = "ce_partitionkey"
+
+	// this is different from other knative error extensions as it's one stateful header
+	CeKafkaHeaderErrorRetryCount = "ce_knativeerrorretrycount"
 )

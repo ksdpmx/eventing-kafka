@@ -89,7 +89,9 @@ func NewHandler(logger *zap.Logger, groupId string, subscriber *eventingduck.Sub
 		if err != nil {
 			logger.Error("Failed To Parse RetryConfig From DeliverySpec - No Retries Will Occur", zap.Error(err))
 		} else {
-			logger.Info("Successfully Parsed RetryConfig From DeliverySpec", zap.Int("RetryMax", handler.retryConfig.RetryMax))
+			logger.Info(
+				"Successfully Parsed RetryConfig From DeliverySpec", zap.Int("RetryMax", handler.retryConfig.RetryMax),
+			)
 			handler.retryConfig.CheckRetry = kncloudevents.SelectiveRetry // Specify Custom CheckRetry Function
 		}
 	}
@@ -113,18 +115,22 @@ func (h *Handler) Handle(ctx context.Context, consumerMessage *sarama.ConsumerMe
 	if h.Logger.Core().Enabled(zap.DebugLevel) {
 
 		// Checked Logging Level First To Avoid Calling StringifyHeaderPtrs() In Production
-		h.Logger.Debug("Consuming Kafka Message",
-			zap.Any("Headers", kafkasarama.StringifyHeaderPtrs(consumerMessage.Headers)), // Log human-readable strings, not base64
+		h.Logger.Debug(
+			"Consuming Kafka Message",
+			zap.Any(
+				"Headers", kafkasarama.StringifyHeaderPtrs(consumerMessage.Headers),
+			), // Log human-readable strings, not base64
 			zap.ByteString("Key", consumerMessage.Key),
 			zap.ByteString("Value", consumerMessage.Value),
 			zap.String("Topic", consumerMessage.Topic),
 			zap.Int32("Partition", consumerMessage.Partition),
-			zap.Int64("Offset", consumerMessage.Offset))
+			zap.Int64("Offset", consumerMessage.Offset),
+		)
 	}
 
 	// Convert ConsumerMessage.Headers Into HTTP Header Struct For Dispatching (Passing-Through of "Additional Headers")
 	// Using Sarama RecordHeaders instead of CloudEvent Message.Headers to support multi-value HTTP Headers without
-	// serialization.  Also, filtering CloudEvent "ce" headers which are already taken from the Message.
+	// serialization.  Also, filtering CloudEvent "ce" headers which are already taken from the Message, except for ce_knativeerrorretrycount.
 	httpHeader := tracing.ConvertRecordHeadersToHttpHeader(tracing.FilterCeRecordHeaders(consumerMessage.Headers))
 
 	// Convert The Sarama ConsumerMessage Into A CloudEvents Message
@@ -139,7 +145,9 @@ func (h *Handler) Handle(ctx context.Context, consumerMessage *sarama.ConsumerMe
 	defer span.End()
 
 	// Dispatch The Message With Configured Retries, DLQ, etc
-	info, err := h.MessageDispatcher.DispatchMessageWithRetries(ctx, message, httpHeader, h.destinationURL, h.replyURL, h.deadLetterURL, &h.retryConfig)
+	info, err := h.MessageDispatcher.DispatchMessageWithRetries(
+		ctx, message, httpHeader, h.destinationURL, h.replyURL, h.deadLetterURL, &h.retryConfig,
+	)
 	h.Logger.Debug("Received Response", zap.Any("ExecutionInfo", executionInfoWrapper{info}))
 
 	//

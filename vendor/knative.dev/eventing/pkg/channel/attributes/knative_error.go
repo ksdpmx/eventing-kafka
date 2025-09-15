@@ -28,6 +28,9 @@ const (
 	KnativeErrorCodeExtensionKey       = "knativeerrorcode"
 	KnativeErrorDataExtensionKey       = "knativeerrordata"
 	KnativeErrorDataExtensionMaxLength = 1024
+
+	// this is different from other knative error extensions as it's one stateful header
+	KnativeErrorRetryCountExtensionKey = "knativeerrorretrycount"
 )
 
 // KnativeErrorTransformers returns Transformers which add the specified destination and error code/data extensions.

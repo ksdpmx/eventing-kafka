@@ -26,6 +26,7 @@ import (
 	"go.opencensus.io/plugin/ochttp/propagation/tracecontext"
 	"go.opencensus.io/trace"
 	"go.uber.org/zap"
+	"knative.dev/eventing-kafka/pkg/channel/distributed/receiver/constants"
 )
 
 const (
@@ -41,19 +42,23 @@ func SerializeTrace(spanContext trace.SpanContext) []sarama.RecordHeader {
 	traceParent, traceState := format.SpanContextToHeaders(spanContext)
 
 	if traceState != "" {
-		return []sarama.RecordHeader{{
-			Key:   []byte(traceParentHeader),
-			Value: []byte(traceParent),
-		}, {
-			Key:   []byte(traceStateHeader),
-			Value: []byte(traceState),
-		}}
+		return []sarama.RecordHeader{
+			{
+				Key:   []byte(traceParentHeader),
+				Value: []byte(traceParent),
+			}, {
+				Key:   []byte(traceStateHeader),
+				Value: []byte(traceState),
+			},
+		}
 	}
 
-	return []sarama.RecordHeader{{
-		Key:   []byte(traceParentHeader),
-		Value: []byte(traceParent),
-	}}
+	return []sarama.RecordHeader{
+		{
+			Key:   []byte(traceParentHeader),
+			Value: []byte(traceParent),
+		},
+	}
 }
 
 // StartTraceFromMessage extracts the headers from a message (traceparent and tracestate) and
@@ -61,7 +66,9 @@ func SerializeTrace(spanContext trace.SpanContext) []sarama.RecordHeader {
 // in order to trace the flow of a message.  Multiple spans may be part of a single trace, for
 // example, a dead letter message or a reply should be easy to match with the original message based
 // on the trace ID.  This ID is originally set in the first message header using the SerializeTrace function.
-func StartTraceFromMessage(logger *zap.SugaredLogger, inCtx context.Context, message *protocolkafka.Message, spanName string) (context.Context, *trace.Span) {
+func StartTraceFromMessage(
+	logger *zap.SugaredLogger, inCtx context.Context, message *protocolkafka.Message, spanName string,
+) (context.Context, *trace.Span) {
 	sc, ok := ParseSpanContext(message.Headers)
 	if !ok {
 		logger.Warn("Cannot parse the spancontext, creating a new span")
@@ -126,8 +133,13 @@ func ConvertRecordHeadersToHttpHeader(recordHeaders []*sarama.RecordHeader) http
 func FilterCeRecordHeaders(recordHeaders []*sarama.RecordHeader) []*sarama.RecordHeader {
 	filteredRecordHeaders := make([]*sarama.RecordHeader, 0)
 	for _, recordHeader := range recordHeaders {
-		if recordHeader != nil && !strings.HasPrefix(string(recordHeader.Key), "ce_") {
-			filteredRecordHeaders = append(filteredRecordHeaders, recordHeader)
+		// all ce_ headers are stateless except for ce_knativeerrorretrycount
+		if recordHeader != nil {
+			if strings.HasPrefix(
+				string(recordHeader.Key), constants.CeKafkaHeaderErrorRetryCount,
+			) || !strings.HasPrefix(string(recordHeader.Key), "ce_") {
+				filteredRecordHeaders = append(filteredRecordHeaders, recordHeader)
+			}
 		}
 	}
 	return filteredRecordHeaders
